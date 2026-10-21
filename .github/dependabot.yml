@@ -8,11 +8,17 @@ updates:
       interval: weekly
       day: monday
       time: "03:00"
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps): "
       include: "scope"
     pull-request-branch-name:
       separator: "/"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # Frontend npm dependencies
   - package-ecosystem: npm
@@ -21,21 +27,39 @@ updates:
       interval: weekly
       day: monday
       time: "03:00"
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps): "
       include: "scope"
     pull-request-branch-name:
       separator: "/"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # Backend Python dependencies (uv)
-  - package-ecosystem: pip
+  # Uses "uv" ecosystem (not "pip") to update uv.lock correctly
+  - package-ecosystem: uv
     directory: /backend
     schedule:
       interval: weekly
       day: monday
       time: "03:00"
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps): "
       include: "scope"
     pull-request-branch-name:
       separator: "/"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # @types/node must match Node.js 24 runtime; major updates require manual review
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
