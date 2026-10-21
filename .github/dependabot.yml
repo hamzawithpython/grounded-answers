@@ -8,6 +8,9 @@ updates:
       interval: weekly
       day: monday
       time: "03:00"
+    # Wait 7 days before adopting a new release (security advisories are not delayed)
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps): "
@@ -27,6 +30,8 @@ updates:
       interval: weekly
       day: monday
       time: "03:00"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps): "
@@ -47,6 +52,8 @@ updates:
       interval: weekly
       day: monday
       time: "03:00"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps): "
