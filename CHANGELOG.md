@@ -8,6 +8,11 @@ Dependency and tooling changes are listed here too.
 ### Added
 - ADR 0004: authentication (self-built JWT in FastAPI; EdDSA access tokens; hashed, rotated refresh
   tokens; two read-only `SECURITY DEFINER` RLS exceptions; admin CLI for platform-owner work).
+- ADR 0005: async SQLAlchemy 2.1 with psycopg 3 and Alembic (SQLAlchemy locked to 2.1.5).
+- `grounded_answers/runtime.py`: selector event loop factory for psycopg async on Windows. uvicorn
+  now runs with `--loop grounded_answers.runtime:selector_loop_factory` (RUNBOOK). Loop check for the
+  database engine (added with the engine in Session 2, Step 3).
+- Dependabot: 7-day cooldown on uv, npm and github-actions (version updates only).
 
 ### Changed
 - Spec: SPEC §4 platform owner operations (create tenants, cross-tenant evals) run via an admin CLI using
