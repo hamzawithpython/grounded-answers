@@ -31,6 +31,7 @@ Read `docs/SPEC.md` and `docs/PROGRESS.md` at the start of every session.
 - Never disable a failing test, security check, or lint rule to make CI pass. Fix the cause or ask me.
 - Do not add a dependency without telling me why, its license, and an alternative.
 - Do not commit or push without my approval. Use Conventional Commits.
+- Never kill processes broadly (e.g., `taskkill /IM node.exe`). Stop only the process you started, by its PID, and tell me first.
 
 ## Documentation (update in the SAME step as the code)
 - `docs/SPEC.md` — scope (only change with my approval)

@@ -34,7 +34,7 @@ the answer, and gives admins **evaluation and usage dashboards** to prove it wor
 
 | Role | Who | Can do |
 |---|---|---|
-| Platform owner | Hamza (operator) | Create tenants, view system health, run evals for any tenant |
+| Platform owner | Hamza (operator) | Create tenants and run evals for any tenant **via an admin CLI only** (uses the migration role; no web access to tenant data). View system health (`/ready`, no tenant data). See ADR 0004. |
 | Tenant admin | HR / Ops head | Upload/replace/delete documents, manage users, view analytics and eval results, review flagged answers |
 | Employee | Staff member | Ask questions via web chat or Telegram, view citations, give feedback (helpful / not helpful) |
 
