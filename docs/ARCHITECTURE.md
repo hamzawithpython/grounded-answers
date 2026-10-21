@@ -129,6 +129,29 @@ Every tenant-owned table has:
 
 `tenants` and `users` are not tenant-owned. `tenants` *is* the tenant, and `users` is global identity (ADR 0004).
 
+### `updated_at` trigger
+
+`updated_at` on `users`, `tenant_memberships` and `documents` is maintained by one shared trigger function, `grounded.set_updated_at()`:
+
+```sql
+CREATE FUNCTION grounded.set_updated_at() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, grounded
+AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+-- one BEFORE UPDATE trigger per table, e.g.:
+-- CREATE TRIGGER documents_set_updated_at BEFORE UPDATE ON grounded.documents
+--   FOR EACH ROW EXECUTE FUNCTION grounded.set_updated_at();
+```
+
+- Not `SECURITY DEFINER`: it runs with the caller's privileges and writes only the row being updated, so it needs no elevation.
+- `search_path` is pinned so an object in another schema can't shadow `now()`.
+- The app never sets `updated_at` itself. The trigger is the single source of truth.
+
 ### `tenants`
 
 | Column | Type | Constraints |
@@ -184,6 +207,8 @@ Constraints: `UNIQUE (tenant_id, id)`, `UNIQUE (user_id)` (one membership per us
 
 Constraints: `UNIQUE (tenant_id, id)`. Metadata only; file bytes are in storage.
 
+- `CHECK ((deleted_at IS NULL) = (purge_after IS NULL))`. Both are set together or neither is set.
+
 ### `document_versions`
 
 | Column | Type | Constraints |
@@ -205,6 +230,9 @@ Constraints: `UNIQUE (tenant_id, id)`. Metadata only; file bytes are in storage.
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 
 Constraints: `UNIQUE (tenant_id, id)`.
+
+- `CHECK ((retired_at IS NULL) = (purge_after IS NULL))`. Both are set together or neither is set.
+- `CHECK ((status IN ('retired', 'purging')) = (retired_at IS NOT NULL))`. A version is retired exactly when it's `retired` or `purging`.
 
 **Status meanings:** `queued` and `processing` are ingestion. `ready` can be cited. `failed` is an ingestion failure with a reason. `retired` is replaced or deleted and waiting for purge. `purging` means the purge job has started and the row will be removed.
 
@@ -308,9 +336,22 @@ One transaction: set `documents.deleted_at = now()` and `purge_after = now() + D
 
 `sha256` dedupe is **per tenant only**. Cross-tenant dedupe would reveal that another tenant holds the same file. Duplicate detection queries `(tenant_id, sha256)`, which is indexed but not unique.
 
-### 5.5 Purge (retention job, runs in Session 3 worker)
+### 5.5 Purge (retention job, runs in the Session 3 worker)
 
-The job selects `retired` versions and deleted documents whose `purge_after <= now()`. For each one, in this order (children first, because of RESTRICT):
+The purge job runs as **`worker_user`**, a dedicated LOGIN role with `NOBYPASSRLS` that is not a table owner (ADR 0007).
+
+**Step 0: find due tenants.** The worker calls `grounded.retention_due_tenant_ids()`, a narrow `SECURITY DEFINER` function (owner `retention_definer`, hardened like the auth functions). It returns **only tenant ids** that have a due purge (`purge_after <= now()`), with no document data. The worker then processes each tenant separately:
+
+```text
+for tid in retention_due_tenant_ids():
+    with tenant transaction(tid):          # set_config('app.current_tenant', tid, true)
+        for each due version and deleted document in this tenant:
+            run steps 1-6 below
+```
+
+Each tenant is processed under normal RLS, so the worker can't read or change another tenant's rows, even if the code has a bug.
+
+For each due item, in this order (children first, because of RESTRICT):
 
 1. **Mark** versions `purging` in a transaction. Retrieval already excludes them.
 2. **Delete dependent data** (chunks and embeddings, from Session 3/4; see section 6).
@@ -360,21 +401,37 @@ When it's created, the table will follow the same rules:
 | Table | RLS | Policies |
 |---|---|---|
 | `tenants` | ENABLE + FORCE | `app_user`: SELECT own row. `auth_definer`: SELECT (login). Migration role: all (operator). |
-| `users` | ENABLE + FORCE | `app_user`: tenant-scoped SELECT and UPDATE (member of current tenant). `auth_definer`: SELECT (login). |
-| `tenant_memberships` | ENABLE + FORCE | `app_user`: scoped to current tenant. `auth_definer`: SELECT (login). |
-| `documents`, `document_versions` | ENABLE + FORCE | `app_user`: scoped to current tenant. |
-| `audit_log` | ENABLE + FORCE | `app_user`: scoped to current tenant, `INSERT` and `SELECT` only. |
+| `users` | ENABLE + FORCE | `app_user`: tenant-scoped SELECT and UPDATE (member of current tenant). **INSERT** for employee creation, with `WITH CHECK (true)`: the membership insert in the same transaction is the real gate (ADR 0004 amendment). `auth_definer`: SELECT (login). |
+| `tenant_memberships` | ENABLE + FORCE | `app_user`: tenant-scoped SELECT, **INSERT** (`WITH CHECK tenant_id = current tenant`), UPDATE. `auth_definer`: SELECT (login). |
+| `documents` | ENABLE + FORCE | `app_user`: scoped to current tenant. `worker_user`: scoped to current tenant, SELECT and DELETE (DELETE only when deleted and with no versions left). |
+| `document_versions` | ENABLE + FORCE | `app_user`: scoped to current tenant. `worker_user`: scoped to current tenant. UPDATE only `retired` to `purging`. DELETE only when `purging`. |
+| `audit_log` | ENABLE + FORCE | `app_user`: scoped to current tenant, `INSERT` and `SELECT` only. `worker_user`: `INSERT` only. |
 | `refresh_tokens` | ENABLE + FORCE | `app_user`: scoped to current tenant. `auth_definer`: SELECT (refresh). |
 | `password_reset_tokens` | ENABLE + FORCE | `app_user`: scoped to current tenant. |
+| `tenants` | ENABLE + FORCE | `app_user`: SELECT own row only. `auth_definer`: SELECT (login, `status` only). Migration role: all (operator). |
+| `grounded.retention_due_tenant_ids()` | n/a (function) | Returns tenant ids only. Owner `retention_definer`, which has SELECT on `documents` and `document_versions` through `USING (true)` policies limited to that role. |
 
 - "Scoped to current tenant" means `tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid`. With no tenant set, every policy returns zero rows (fail closed).
-- `auth_definer` is a `NOLOGIN` role with no `BYPASSRLS`. It can run only the login and refresh functions (ADR 0004).
-- No role has `BYPASSRLS`. Superusers bypass RLS by design, and the app never connects as one.
-- Policies are written in Session 2, Step 5 and tested in Step 6 (ADR 0006).
+- **Tenant-owned tables are never written without a tenant.** `app_user`'s INSERT on `users` is the only INSERT that isn't tenant-scoped at the policy level. It's safe because a user row has no tenant access until a membership row exists, and the membership insert is tenant-scoped.
+
+### 7.1 Database roles
+
+| Role | Login | Attributes | Purpose |
+|---|---|---|---|
+| `migration_role` | yes (`MIGRATION_DATABASE_URL`) | NOSUPERUSER, NOBYPASSRLS | Owns the schema, tables, functions and triggers. Runs Alembic and the admin CLI. Never used by the web app or the worker. |
+| `app_user` | yes (`DATABASE_URL`) | NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE, NOINHERIT | Web app. Tenant-scoped by RLS. |
+| `worker_user` | yes (worker only) | NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE, NOINHERIT | Retention purge job. Tenant-scoped by RLS, plus one tenant-id function. |
+| `auth_definer` | **no** (NOLOGIN) | NOBYPASSRLS | Owns the login and refresh functions (ADR 0004). |
+| `retention_definer` | **no** (NOLOGIN) | NOBYPASSRLS | Owns `retention_due_tenant_ids()` (ADR 0007). |
+
+- No role has `BYPASSRLS` or `SUPERUSER`, except the cluster admin used only for bootstrap (locally the Docker `postgres` user; on a managed host, the provider's owner role). The app and the worker never connect as that role.
+- `NOINHERIT` on login roles prevents them from picking up privileges through membership in the definer roles.
+- The bootstrap plan (roles and grants) is in ADR 0006 and the Step 4 SQL. Grants are versioned Alembic migrations, not one-off commands.
 
 ## 8. Open items
 
 - **Chunks table:** deferred to Session 3/4, pending the embedding model decision.
 - **Document storage backend:** `storage_key` is a logical key. The backend (local disk or object storage) is decided later.
-- **Retention decision in ADR form:** the retention behaviour above is a product decision and needs its own ADR (CLAUDE.md: one ADR per decision). Not written yet.
-- **SPEC §6.1:** does not yet describe retention or deletion. A change to SPEC needs approval.
+- **Retention decision:** recorded in ADR 0007 (Proposed). Includes the purge worker design, the backup limitation and the open question on the 30-day default.
+- **Backups:** purge removes live data, not backup copies. The backup retention window depends on the hosting provider and must be recorded in SECURITY.md and RUNBOOK when the host is chosen.
+- **SPEC §6.1:** proposed update for retention and deletion is in the ADR 0007 review. It needs approval before it's applied.

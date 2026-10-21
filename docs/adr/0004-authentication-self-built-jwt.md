@@ -278,7 +278,7 @@ Settings: frontend `next dev -H 127.0.0.1` (the `dev` script), `NEXT_PUBLIC_API_
 
 - **Positive:** no vendor lock-in; no free-tier pause; refresh-token reuse is detected on next use.
 - **Negative:** we own the security work. Mitigation: libraries only, a test per rule, and a threat model in SECURITY.md (Session 2, Step 8).
-- **Negative:** two intentional RLS exceptions (login and refresh lookups). Both are read-only `SECURITY DEFINER` functions with hardened `search_path`, execute-restricted to `app_user`, owned by the non-login `auth_definer` role, which has narrow policies and no `BYPASSRLS`. Documented in ARCHITECTURE.md and tested.
+- **Negative:** two intentional RLS exceptions (login and refresh lookups). *Amended by ADR 0007: a third, read-only function, `retention_due_tenant_ids()`, returns tenant ids only, for the purge worker.* Both are read-only `SECURITY DEFINER` functions with hardened `search_path`, execute-restricted to `app_user`, owned by the non-login `auth_definer` role, which has narrow policies and no `BYPASSRLS`. Documented in ARCHITECTURE.md and tested.
 - **Negative:** the migration role is unrestricted across tenants through explicit policies (for operator work). Its credentials must stay off the web app and out of CI jobs that don't need them.
 - **Negative:** v1 allows one tenant membership per user (`UNIQUE(user_id)`).
 - **Negative:** the access token lives in JS memory, so an XSS bug could read it during its 15-minute life. Mitigations: strict CSP, no `dangerouslySetInnerHTML`, short lifetime.

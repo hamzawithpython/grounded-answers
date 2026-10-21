@@ -54,6 +54,10 @@ No WhatsApp. No phone/voice in v1.
 - Background ingestion: extract text → clean → split into chunks → create embeddings → store.
 - Document versioning: replacing a document retires old chunks; answers always cite the current version.
 - Ingestion status visible to admins (queued / processing / ready / failed + reason).
+- **Deletion:** an admin can delete a document. A deleted document, and any replaced version, is excluded from answers as soon as the deletion is saved. Its content is permanently purged after a retention period (default 30 days, set per deployment). Restore is not supported in v1. (ADR 0007)
+- **Replacement:** a new version replaces the current one for answers once ingestion succeeds. The previous version follows the same retention period.
+- **Upload limits:** maximum 10 MiB per file. The file type is checked from the file's content, not the client-supplied type.
+- **Audit:** deletion and purge are recorded in the audit log without document content.
 
 ### 6.2 Answering
 - Hybrid retrieval: keyword search + vector search, results merged; optional reranking.
