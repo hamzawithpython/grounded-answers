@@ -82,6 +82,37 @@ docker compose down
 docker compose up -d
 ```
 
+### Gitleaks Fails on First Push
+
+**Symptom:** GitHub Actions security job fails with:
+```
+fatal: ambiguous argument '<sha>^..<sha>': unknown revision or path not in the working tree
+```
+
+**Cause:** On the first push to a repo, the root commit has no parent. Gitleaks tries to scan `parent..commit` but parent doesn't exist.
+
+**Fix:**
+- This is expected and harmless on initial push. Gitleaks will scan normally on subsequent commits (which all have parents).
+- No action required; the failure is transient.
+
+### Run Local Gitleaks Scan
+
+**Full scan (v8.24.3):**
+```powershell
+# Requires Docker
+docker run --rm -v "${PWD}:/repo" zricethezav/gitleaks:v8.24.3 detect --source /repo -v
+```
+
+**Expected output (no leaks found):**
+```
+No leaks detected.
+```
+
+**If false positives appear:**
+- Check `.gitleaks.toml` allowlist in the repo root
+- Verify the regex matches your case (e.g., Docker image tags like `7.4.11-alpine3.24`)
+- Run with `--config .gitleaks.toml` to load custom rules
+
 ## CI/CD
 
 CI runs on every push to `main` and on pull requests. See `.github/workflows/ci.yml` for job definitions.

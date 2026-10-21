@@ -1,0 +1,24 @@
+# Gitleaks configuration: extends default rules with Docker image version tag allowlist
+# Prevents false positives on Docker image tags like "7.4.11-alpine3.24", "0.8.7-pg17"
+#
+# How it works:
+# - useDefault = true loads the built-in gitleaks rules (including generic-api-key)
+# - [[rules]] with id = "generic-api-key" extends that rule
+# - regexes in [rules.allowlist] MERGE with the default generic-api-key allowlist
+#   (gitleaks v8.24.3+ merges allowlists; it does not replace)
+
+[extend]
+useDefault = true
+
+[[rules]]
+# Extend generic-api-key with Docker version tag allowlist
+# Matches semantic version tags with any lowercase base image name
+# Examples: 7.4.11-alpine, 0.8.7-alpine3.24, 9.1.2-alpine3.24, 0.8.7-pg17
+id = "generic-api-key"
+
+[rules.allowlist]
+regexes = [
+  # Semantic version (x.y.z) followed by hyphen and base image name
+  # e.g., 7.4.11-alpine, 9.1.2-alpine3.24, 0.8.7-pg17, 0.8.7-debian12
+  '\d+\.\d+\.\d+-[a-z]+[\d.]*'
+]

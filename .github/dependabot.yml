@@ -1,0 +1,41 @@
+version: 2
+updates:
+  # GitHub Actions: keep SHA-pinned actions updated
+  # Dependabot detects pinned SHAs, finds new commits, and creates PRs with updated SHAs
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+    commit-message:
+      prefix: "chore(deps): "
+      include: "scope"
+    pull-request-branch-name:
+      separator: "/"
+
+  # Frontend npm dependencies
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+    commit-message:
+      prefix: "chore(deps): "
+      include: "scope"
+    pull-request-branch-name:
+      separator: "/"
+
+  # Backend Python dependencies (uv)
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+    commit-message:
+      prefix: "chore(deps): "
+      include: "scope"
+    pull-request-branch-name:
+      separator: "/"
