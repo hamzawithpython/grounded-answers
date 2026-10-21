@@ -33,9 +33,9 @@ docker compose up -d
 # Verify services are healthy
 docker compose ps
 
-# Backend
+# Backend (uses --factory to load app from create_app function, not module-level import)
 cd backend
-uv run uvicorn grounded_answers.main:app --reload
+uv run uvicorn grounded_answers.main:create_app --factory --reload
 
 # Frontend (in another terminal)
 cd frontend

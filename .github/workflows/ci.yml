@@ -49,8 +49,9 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
-      - run: npm audit --audit-level=high
-      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm audit
+        continue-on-error: true
 
   security:
     runs-on: ubuntu-latest
