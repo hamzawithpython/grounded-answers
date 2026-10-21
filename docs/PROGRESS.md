@@ -9,7 +9,7 @@
 - ✅ Python dependency manager: uv — ADR 0002
 - ✅ Node package manager: npm — part of ADR 0002
 - ✅ In-memory cache: Valkey 9.1.2 (BSD license, open-source fork) — ADR 0003
-- ✅ docker-compose.yml (PostgreSQL 17 + pgvector 0.8.7, Valkey 7.4.11)
+- ✅ docker-compose.yml (PostgreSQL 17 + pgvector 0.8.7, Valkey 9.1.2)
 
 ### Backend (FastAPI + Python 3.12)
 - ✅ Package structure: src/grounded_answers/
@@ -45,15 +45,72 @@
 ### CI/CD
 - ✅ .github/workflows/ci.yml
   - Backend job: uv sync, ruff, mypy, pip-audit, pytest
-  - Frontend job: npm ci, eslint, typecheck, vitest, npm audit, npm build
-  - Security job: gitleaks (full history scan)
+  - Frontend job: npm ci, eslint, typecheck, vitest, **npm audit --omit=dev** (blocking), npm audit (non-blocking), npm build
+  - Security job: gitleaks (full history scan) with custom allowlist for Docker image tags
   - Concurrency: cancel-in-progress on new push
   - Caching: uv wheels, npm packages
+  - All actions pinned to commit SHAs (supply-chain security)
+- ✅ .github/dependabot.yml
+  - Three ecosystems: github-actions, npm (frontend), uv (backend)
+  - Weekly schedule (Monday 03:00 UTC)
+  - Grouping: minor + patch updates grouped, major updates separate
+  - Ignores: semver-major updates for @types/node (must match Node 24 runtime)
+  - Limit: max 5 open PRs per ecosystem
+- ✅ .gitleaks.toml
+  - Custom allowlist for Docker image version tags (7.4.11-alpine, 9.1.2-alpine3.24, etc.)
+  - Extends default rules with [extend] useDefault = true
+- ✅ docs/SECURITY.md
+  - Threat model structure (TBD Session 2)
+  - Known vulnerabilities: braces (GHSA-vfj7-8cjw-p6xm, no patch yet; dev-only mitigation via --omit=dev)
+  - Security controls inventory: RLS, secrets, validation, CORS, rate-limiting, audit logging (TBD)
+  - Pre-production checklist
+
+### Code Quality & Testing
+- ✅ Test isolation: autouse fixture in conftest.py (not duplicated in test_config.py)
+  - Tests run without backend/.env (set via monkeypatch in conftest)
+  - cache_clear() called before/after each test to prevent cache cross-talk
+- ✅ Import-time side effects removed
+  - Deleted module-level `app = create_app()` from main.py
+  - Uvicorn now uses `--factory` flag to load app from create_app function
+  - Prevents import-time DB/cache initialization (improves testing)
+- ✅ All checks pass: ruff, mypy, pytest (10 backend), eslint, typecheck, vitest (4 frontend)
 
 ## In Progress
-(None — all step (c) work done)
+(None — all step (c) work done, Session 1 complete)
 
-## To Do (Session 2+)
+## Next Session (Session 2) Starts Here
+
+### Priority Tasks
+1. **ESLint 9 → 10 Upgrade**
+   - ESLint 9 is end-of-support; upgrade to ESLint 10 immediately
+   - Before upgrading: verify eslint-config-next supports ESLint 10 via official docs/changelog
+   - Read ESLint 10 migration notes carefully
+   - Upgrade deliberately, run all frontend checks (lint, typecheck, test, build)
+   - Commit result with clear message
+
+2. **Database Schema & Multi-Tenancy**
+   - Create Alembic migration structure (migrations/ folder, env.py, versions/)
+   - Database schema:
+     - `tenants` table (id, name, created_at)
+     - `users` table (id, tenant_id, email, role: admin/employee/viewer, created_at)
+     - `documents` table (id, tenant_id, name, content_type, size, created_by, created_at, updated_at)
+     - `chunks` table (id, document_id, content, embedding, metadata, created_at)
+   - Create limited `app_user` PostgreSQL role (superusers/table owners bypass RLS)
+   - Row-Level Security (RLS) policies:
+     - `documents`: users see only their tenant's documents
+     - `chunks`: users see only chunks from their tenant's documents
+   - Add `/ready` endpoint: checks PostgreSQL + Valkey connectivity, returns 503 if unavailable
+   - Write tenant isolation tests in CI: cross-tenant queries blocked
+   - Run all checks, add integration tests for RLS
+   - Commit with clear message
+
+### Follow-on Tasks
+- Retrieval & Ingestion (document upload, chunking, embeddings)
+- Answering (LLM integration, prompt engineering, citations)
+- Admin Features (document management, user management, analytics)
+- Evaluation (eval dataset, metrics, dashboards)
+
+## To Do (Session 3+)
 
 ### Retrieval & Ingestion
 - Document upload: PDF/DOCX/TXT/Markdown with file size limits
@@ -104,6 +161,23 @@
 - Rate limiting: per user, per tenant
 - Audit log: admin actions (upload, delete, user changes)
 - Secret scanning: gitleaks in CI (done), pre-commit hooks (todo)
+
+## Local Environment Notes
+
+- **Windows PostgreSQL**: Stop local PostgreSQL 17/18 services and set to Manual startup (not Automatic). Docker Compose provides isolated services.
+- **Node.js**: Requires Node >= 24.15 (jsdom 30 needs this). Currently running 24.20. Use `.nvmrc` to pin version.
+- **Backend**: Run uvicorn with `--factory` flag (not module-level app instantiation).
+- **npm audit**: Known advisory (braces, GHSA-vfj7-8cjw-p6xm, dev-only) documented in `docs/SECURITY.md`. CI gates on `--omit=dev`.
+
+## Data Plan
+
+- **Session 3**: Ingest Indus Freight Lines documents (mix of PDF and DOCX formats) into test environment.
+- **Before Session 4**: Create ~50 synthetic evaluation questions covering:
+  - Direct facts (shipper details, pricing, routing)
+  - Comparison queries (rates across corridors, service levels)
+  - Unanswerable questions (edge cases, missing data)
+  - Multi-turn follow-ups
+  These questions seed the eval dataset and CI evaluation runs.
 
 ## Notes
 - All checks (backend + frontend) pass with zero warnings
