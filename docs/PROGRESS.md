@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (end of Session 1)
+**Last updated:** 2026-10-22 (Session 2, Step 1 done)
 
 ## Completed
 
@@ -81,7 +81,7 @@
 ## Next Session (Session 2) Starts Here
 
 ### Priority Tasks
-1. **ESLint 9 → 10 Upgrade**
+1. ✅ **ESLint 9 → 10 Upgrade** (done Session 2, Step 1: eslint 10.13.0; plugin peer gap tracked in SECURITY.md, review 2026-12-01)
    - ESLint 9 is end-of-support; upgrade to ESLint 10 immediately
    - Before upgrading: verify eslint-config-next supports ESLint 10 via official docs/changelog
    - Read ESLint 10 migration notes carefully
