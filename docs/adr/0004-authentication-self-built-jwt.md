@@ -1,6 +1,6 @@
 # ADR 0004: Authentication — Self-Built JWT in FastAPI
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-10-22: suspended tenants, see "Suspended tenants")
 
 **Date:** 2026-10-22
 
@@ -78,7 +78,7 @@ Because `users` has no tenant column, RLS on it is policy-based, not column-base
 
 | Function | Used for | Returns (minimum columns) | Why it exists |
 |---|---|---|---|
-| `auth_login_lookup(email)` | Login | `user_id`, `password_hash`, `user_active`, `tenant_id`, `membership_role`, `membership_active` | Login happens before tenant context exists. |
+| `auth_login_lookup(email)` | Login | `user_id`, `password_hash`, `user_active`, `tenant_id`, `tenant_status`, `membership_role`, `membership_active` | Login happens before tenant context exists. `tenant_status` was added in the 2026-10-22 amendment (suspended tenants). |
 | `auth_refresh_lookup(token_hash)` | Refresh | `token_id`, `user_id`, `tenant_id`, `family_id`, `used_at`, `revoked_at`, `expires_at` | The opaque token doesn't say which tenant it belongs to. |
 
 After either lookup, the app runs `SET LOCAL app.current_tenant`, and all further reads and writes go through normal RLS. The functions only read; rotation, revocation and writes always run as `app_user` under RLS.
@@ -103,6 +103,7 @@ A `SECURITY DEFINER` function runs as its owner. We give ownership of the two fu
 | `users` | SELECT | `CREATE POLICY auth_definer_login ON users FOR SELECT TO auth_definer USING (true)` | `auth_login_lookup` |
 | `tenant_memberships` | SELECT | `CREATE POLICY auth_definer_login ON tenant_memberships FOR SELECT TO auth_definer USING (true)` | `auth_login_lookup` |
 | `refresh_tokens` | SELECT | `CREATE POLICY auth_definer_refresh ON refresh_tokens FOR SELECT TO auth_definer USING (true)` | `auth_refresh_lookup` |
+| `tenants` | SELECT | `CREATE POLICY auth_definer_login ON tenants FOR SELECT TO auth_definer USING (true)` | `auth_login_lookup` (reads `status` only) |
 
 - Column-level `GRANT SELECT` on only the columns listed in the function table above.
 - No INSERT, UPDATE or DELETE for `auth_definer`. Writes always run as `app_user`.
@@ -121,6 +122,20 @@ A `SECURITY DEFINER` function runs as its owner. We give ownership of the two fu
 - **Application and CLI roles:** `app_user`, `auth_definer`, and the migration role are never granted `BYPASSRLS`.
 - **Migration role and the admin CLI's RLS treatment:** the migration role owns the tenant tables, and `FORCE ROW LEVEL SECURITY` applies to owners too. Platform-owner operations (creating tenants, cross-tenant evals) need the migration role to see all tenants. So each tenant table gets an explicit policy `TO migration_role USING (true) WITH CHECK (true)`. This is an explicit grant, not a bypass, and it's visible in the policy list. It is also the only cross-tenant access for operators. *New fact for review:* the migration role is unrestricted across tenants through these policies, which is why its credentials stay on the operator's machine or in a protected CI secret.
 - **Superusers always bypass RLS.** The Docker `postgres` user is a superuser, so the app never connects as it. Step 6's superuser test documents this.
+
+### Suspended tenants (amendment, 2026-10-22)
+
+A tenant can be `suspended` (see `tenants.status` in ARCHITECTURE.md). Suspension blocks access without deleting data.
+
+- **Login** (`auth_login_lookup`) returns `tenant_status`. For a suspended tenant, login returns the **same generic `401 Invalid email or password`** as a wrong password, with the same body and timing. Unauthenticated callers must not learn that a tenant exists or is suspended.
+- **`tenants` RLS for `app_user`:** `FOR SELECT TO app_user USING (id = <current tenant>)`. The app reads its own tenant row and nothing else. No `INSERT`, `UPDATE` or `DELETE` grants. Platform changes go through the admin CLI (the migration role).
+- **Per-request check:** `tenant_session` reads the tenant row in the same transaction as the membership check. A suspended tenant returns **`403 Tenant access is suspended`**. Only already-authenticated users reach this, so it reveals nothing to strangers.
+- **Tests:**
+  - Login to a suspended tenant returns the generic `401`, byte-identical to a wrong password.
+  - An authenticated request for a suspended tenant returns `403`.
+  - `app_user` sees only its own tenant row.
+  - `app_user` cannot `UPDATE tenants`.
+  - `auth_definer` reads `tenants.status` only (the `tenants` policy grants no other access).
 
 ### Tenant admin user management (`app_user`, web app)
 
@@ -295,6 +310,7 @@ Settings: frontend `next dev -H 127.0.0.1` (the `dev` script), `NEXT_PUBLIC_API_
   - Refresh: reuse detection revokes the family; grace-window retry does not; logout-all; expired and wrong-`alg` tokens rejected; forged `tid` returns 401.
   - Login: lockout per (email, IP); per-IP limit; progressive delay; generic error text; dummy-hash timing path.
   - Functions: both return only minimum columns and execute only for `app_user`; `auth_definer` cannot log in and has no access outside its policies.
+  - Suspended tenants: generic `401` at login; `403` per request; `app_user` sees only its own tenant row and cannot update `tenants` (see "Suspended tenants").
   - Superuser bypass documented; audit row written; `Secure` cookie accepted on `http://127.0.0.1`.
 - Tests (Step 6), tenant-admin user management:
   - `app_user` sees only users with a membership in the current tenant; zero rows with no tenant context; zero rows for another tenant.
