@@ -21,6 +21,18 @@
 - [ ] Once patched, upgrade eslint-config-next or braces directly
 - **Review date:** 2026-11-22 (one month)
 
+### npm: ESLint plugin peer ranges below ESLint 10 (dev-only, not a vulnerability)
+
+**Issue:** `eslint-config-next@16.4.2` bundles `eslint-plugin-react`, `eslint-plugin-jsx-a11y` and `eslint-plugin-import`. Their peer ranges stop at ESLint 9, so `npm ls eslint` reports them as invalid. `npm ci` still succeeds (npm prints `ERESOLVE overriding peer dependency` warnings).
+
+**Verified:** 2026-10-22. Lint runs and reports violations from all three plugins (planted `rules-of-hooks`, `jsx-a11y/alt-text`, and `react-hooks` cases). No ESLint 10 breakage found.
+
+**Risk:** dev-only (lint tooling). A plugin could break on a future ESLint 10 minor release without a peer warning.
+
+**Action items:**
+- [ ] Re-check when `eslint-config-next` declares ESLint 10 peer support (`npm view eslint-config-next@latest peerDependencies`)
+- **Review date:** 2026-12-01
+
 ---
 
 ## Threat Model
