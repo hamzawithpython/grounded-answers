@@ -1,0 +1,59 @@
+[project]
+name = "grounded-answers"
+version = "0.1.0"
+description = "Multi-tenant document Q&A assistant"
+authors = [
+    { name = "Hamza Asif", email = "hamza.asif6182@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.158.1",
+    "pydantic-settings>=2.16.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx2>=0.1.0",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E: pycodestyle errors (whitespace, indentation, imports)
+# W: pycodestyle warnings (deprecated code patterns)
+# F: Pyflakes (undefined names, duplicate imports, etc.)
+# I: isort (import sorting)
+# UP: pyupgrade (modernize Python syntax)
+# B: flake8-bugbear (logical bugs, security issues)
+# C4: flake8-comprehensions (list/dict/set comprehension optimizations)
+# S: bandit security checks
+# RUF: Ruff-specific (additional checks by Ruff)
+select = ["E", "W", "F", "I", "UP", "B", "C4", "S", "RUF"]
+# Ignore: line too long (enforced by formatter)
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101: allow assert in tests (pytest uses them)
+"tests/*" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+# Strict mode: enforce all type checking rules for maximum safety
+# (includes disallow_untyped_defs, check_untyped_defs, no_implicit_optional, etc.)
+strict = true
+# Show error codes for easier lookup
+show_error_codes = true
+# Enable pydantic plugin for better type checking of pydantic-settings
+plugins = ["pydantic.mypy"]
