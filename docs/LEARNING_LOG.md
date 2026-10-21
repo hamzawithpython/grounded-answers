@@ -168,15 +168,47 @@ docs/           # Documentation
 9. Vitest + React Testing Library (StatusCard tests, 4/4 passing)
 10. GitHub Actions CI (ruff, mypy, pytest, eslint, typecheck, vitest, npm audit, gitleaks)
 
-⏭️ **Next session (Session 2):**
-1. Document ingestion pipeline (PDF/DOCX upload, text extraction, chunking)
-2. Vector embeddings (pgvector, embedding model selection)
-3. Retrieval: hybrid search (keyword + semantic)
-4. LLM answering: prompt engineering, citations
-5. Evaluation harness (eval dataset, metrics, automated CI runs)
-6. Admin panel: upload documents, manage users
-7. Readiness endpoint (`/ready` checking DB, cache)
-8. Multi-tenancy: Row-Level Security in PostgreSQL
+## Late-Session Refinements (Session 1 Closure)
+
+### Import-Time Side Effects & App Factory Pattern
+- **Problem:** Module-level `app = create_app()` instantiated the app at import time, triggering DB/cache initialization
+- **Impact:** Tests couldn't run without a real `.env` file; not testable in CI without infrastructure mocked
+- **Solution:** Move to FastAPI app factory pattern:
+  - Keep `create_app()` function; remove module-level instantiation
+  - Run uvicorn with `--factory` flag: `uvicorn module:create_app --factory`
+  - Tests instantiate fresh app per test: `app = create_app()` inside test function
+- **Lesson:** Separate app construction from app startup; factory pattern is standard in production FastAPI services
+
+### Test Isolation via conftest.py
+- **Autouse fixtures:** Place shared test setup in `conftest.py` with `@pytest.fixture(autouse=True)`
+- **Applies to all tests:** No need to pass fixture as parameter; runs before/after every test in the directory tree
+- **Pattern:** Clear caches (`get_settings.cache_clear()`) before and after, set env vars via monkeypatch
+- **Why it works:** Tests are now independent of developer's `.env` file; CI runs without `.env` present
+- **Lesson:** Conftest is the right place for cross-cutting test setup; avoid duplication across test files
+
+### npm Audit Gating Strategy for Monorepos
+- **Problem:** npm audit reports dev vulnerabilities (braces, fast-glob, etc.) that don't reach production
+- **Solution (2-step):**
+  1. **Blocking gate:** `npm audit --omit=dev --audit-level=high` (fails CI if prod deps have high/critical vulnerabilities)
+  2. **Non-blocking visibility:** `npm audit` with `continue-on-error: true` (reports all issues, doesn't fail CI)
+- **Why:** Separates real risks (production dependencies) from dev-only risks (build tools, testing libs)
+- **Documentation:** Record in SECURITY.md with rationale, review dates, and mitigation (dev-only nature)
+- **Lesson:** Not all vulnerabilities are blocking; context (prod vs dev) determines severity
+
+### Dependency Automation with Dependabot
+- **Configuration:** Specify ecosystem (uv for Python, npm for Node, github-actions for Actions)
+- **Grouping:** Use `update-types: ["minor", "patch"]` to group non-breaking updates; keep major updates separate for manual review
+- **Ignores:** Can ignore specific major-version updates (e.g., @types/node must match Node runtime version)
+- **Limits:** Set `open-pull-requests-limit` to control PR spam (e.g., 5 open at a time)
+- **Lesson:** Automation reduces toil; configuration prevents noise; major updates always need human review
+
+### Secret Scanning & Custom Allowlists
+- **gitleaks:** Scans git history for credentials, API keys, etc.
+- **False positives:** Docker image tags (7.4.11-alpine) can trigger detection
+- **Solution:** Custom `.gitleaks.toml` with [extend] useDefault = true and regex allowlists
+- **Pattern:** `'\d+\.\d+\.\d+-[a-z]+[\d.]*'` matches semantic versions with build tags
+- **Allowlists MERGE:** Adding a custom allowlist doesn't replace defaults; both are checked
+- **Lesson:** Secret scanning is mandatory in CI; false positives need explicit configuration, not disabled rules
 
 ## Key Takeaways for Future Sessions
 
@@ -187,3 +219,8 @@ docs/           # Documentation
 5. **CORS is not negotiable.** A wildcard (`"*"`) is a security hole. Always use an allowlist; tie it to settings.
 6. **Secrets never go in NEXT_PUBLIC_.** The browser sees it. Use server-side environment variables for secrets.
 7. **Test files have different type config.** vitest/globals and testing-library types should be loaded; exclude test files from production build type check.
+8. **Avoid import-time side effects.** Use app factory pattern; instantiate at request time, not import time. FastAPI `--factory` flag + fresh app per test.
+9. **Conftest.py is for cross-cutting setup.** Autouse fixtures here apply to all tests; clear caches before/after to prevent cross-talk.
+10. **Not all vulnerabilities are equal.** npm audit: separate prod deps (blocking gate) from dev-only (non-blocking visibility). Context matters.
+11. **Dependency automation needs guardrails.** Dependabot: group minor/patch (non-breaking), keep major updates separate, ignore version-pinned deps (e.g., @types/node per Node runtime).
+12. **Document your security decisions.** SECURITY.md records vulnerabilities, mitigations, and review dates. Allowlists are not "ignoring" the problem; they're explicit trade-offs.
