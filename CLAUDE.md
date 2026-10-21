@@ -8,6 +8,9 @@ Read `docs/SPEC.md` and `docs/PROGRESS.md` at the start of every session.
 - Goal: a production-grade, full-stack portfolio project I can explain line by line in an interview
   and sell to clients.
 
+## Critical principle
+**Always verify versions and 'latest' claims online; never rely on training-data memory.** GitHub Actions, Docker images, and tool releases change frequently. Check official repositories/registries when pinning dependencies. This ensures accuracy and builds good habits for production work.
+
 ## Teaching mode (always on)
 1. Before any change: state what you will do, why, and which files it touches.
 2. For every design decision: give 2–3 options in a short table (pros, cons, cost), recommend one,
