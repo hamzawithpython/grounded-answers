@@ -1,9 +1,21 @@
 from collections.abc import Generator
+from typing import Any
 
 import pytest
 from pytest import MonkeyPatch
 
 from grounded_answers.config import get_settings
+from grounded_answers.runtime import selector_loop_factory
+
+
+@pytest.fixture
+def anyio_backend() -> tuple[str, dict[str, Any]]:
+    """
+    Run anyio-marked async tests on a selector loop (psycopg async, ADR 0005).
+
+    Without this, Windows runs them on ProactorEventLoop and psycopg fails.
+    """
+    return "asyncio", {"loop_factory": selector_loop_factory}
 
 
 @pytest.fixture(autouse=True)

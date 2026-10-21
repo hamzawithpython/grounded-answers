@@ -48,8 +48,10 @@ docker compose up -d
 docker compose ps
 
 # Backend (uses --factory to load app from create_app function, not module-level import)
+# --loop: psycopg async needs a selector loop. On Windows uvicorn defaults to ProactorEventLoop,
+# which psycopg does not support (ADR 0005). Linux/macOS are unaffected but the flag is harmless.
 cd backend
-uv run uvicorn grounded_answers.main:create_app --factory --reload
+uv run uvicorn grounded_answers.main:create_app --factory --loop grounded_answers.runtime:selector_loop_factory --reload
 
 # Frontend (in another terminal)
 cd frontend
