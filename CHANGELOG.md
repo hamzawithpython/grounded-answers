@@ -9,6 +9,8 @@ Dependency and tooling changes are listed here too.
 - ADR 0004: authentication (self-built JWT in FastAPI; EdDSA access tokens; hashed, rotated refresh
   tokens; two read-only `SECURITY DEFINER` RLS exceptions; admin CLI for platform-owner work).
 - ADR 0005: async SQLAlchemy 2.1 with psycopg 3 and Alembic (SQLAlchemy locked to 2.1.5).
+- ADR 0006: DB test strategy (CI service container with the pinned pgvector image; fresh test database
+  per session; migrations from empty; guard covering the admin URL; isolation tests use real logins).
 - `grounded_answers/runtime.py`: selector event loop factory for psycopg async on Windows. uvicorn
   now runs with `--loop grounded_answers.runtime:selector_loop_factory` (RUNBOOK). Loop check for the
   database engine (added with the engine in Session 2, Step 3).

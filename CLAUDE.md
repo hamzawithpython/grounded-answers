@@ -49,3 +49,4 @@ Read `docs/SPEC.md` and `docs/PROGRESS.md` at the start of every session.
 - Read only the files needed for the current step.
 - Prefer one complete, correct change over many partial attempts.
 - At the end of each session, update `docs/PROGRESS.md` so the next session can start quickly.
+- When waiting for CI, start ONE monitor per run. Don't start duplicate monitors or repeat results already reported.
