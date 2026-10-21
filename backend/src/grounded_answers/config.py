@@ -22,11 +22,16 @@ class Settings(BaseSettings):
     database_url: PostgresDsn
     redis_url: RedisDsn
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
+    cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",
         env_file_encoding="utf-8",
     )
+
+    def get_cors_origins(self) -> list[str]:
+        """Parse comma-separated CORS_ORIGINS into a list."""
+        return [origin.strip() for origin in self.cors_origins.split(",")]
 
 
 @functools.lru_cache(maxsize=1)
