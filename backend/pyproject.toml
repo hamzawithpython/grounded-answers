@@ -8,6 +8,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.158.1",
+    "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.16.1",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -48,6 +49,14 @@ ignore = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pytest.ini_options]
+# db: needs the PostgreSQL test database and psql (ADR 0006). Run with: pytest -m db
+# Unit tests run with: pytest -m "not db"
+addopts = "--strict-markers"
+markers = [
+    "db: needs PostgreSQL and psql through PSQL_COMMAND (ADR 0006); fails, never skips, when unavailable",
+]
 
 [tool.mypy]
 # Strict mode: enforce all type checking rules for maximum safety

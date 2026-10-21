@@ -44,9 +44,7 @@ A session-scoped fixture `test_database` does this, in order:
 1. **Safety guard** (below). Refuse to run if the guard fails. Nothing has been dropped at this point.
 2. Connect as the **bootstrap superuser** (`TEST_ADMIN_DATABASE_URL`, to the `postgres` database). Only the test fixture and the superuser-bypass test use this connection.
 3. `DROP DATABASE IF EXISTS grounded_answers_test WITH (FORCE)`, then `CREATE DATABASE grounded_answers_test`. `WITH (FORCE)` is available since PostgreSQL 13, which we are above.
-4. Run the **bootstrap roles script** from ADR 0004 against the test database. The script is idempotent, in two parts:
-   - **Roles are cluster-wide.** Each `CREATE ROLE` is wrapped in a `DO` block that first checks `pg_roles`. Roles survive a database drop, so re-running the script on a second session must not fail. `auth_definer` is NOLOGIN; `app_user` is LOGIN, not superuser, no `BYPASSRLS`.
-   - **Grants are per-database.** `GRANT CONNECT`, schema `USAGE`, table privileges, column privileges and `EXECUTE` on functions live inside the database. A fresh `grounded_answers_test` has none of them, so the grant statements are re-applied in every fresh test database. Grants are issued after the migrations create the objects, so the script runs in two phases: (a) roles and the migration-role membership before migrations, (b) grants after migrations. Phase (b) is `GRANT`s only, so re-running it is harmless.
+4. Run the **cluster bootstrap** once per cluster, and the **database bootstrap** once per fresh database, both as the cluster admin, before migrations. Both are idempotent. Table, column and function grants are **not** in the bootstrap. They are Alembic migration `0001_roles_and_grants`, run as `migration_role` after the schema migrations (see the amendment below).
 5. Run **`alembic upgrade head` from empty**, as the migration role (`MIGRATION_DATABASE_URL`). This proves the migrations work from scratch on every run.
 6. Yield. Tests then connect as `app_user` via `TEST_DATABASE_URL`.
 
@@ -127,7 +125,49 @@ Values are never committed. `.env.example` lists the names with placeholders (Se
 ## Implementation notes
 
 - Dependencies: none new. `pytest`, `psycopg`, `sqlalchemy`, `alembic` are already planned.
-- Files (Session 2, Steps 3–6): `backend/tests/db/conftest.py` (session fixture, guard), `backend/tests/db/test_isolation.py`, `backend/tests/db/test_guard.py`, `backend/scripts/bootstrap_roles.sql` (ADR 0004).
+- Files (Session 2, Steps 3–6): `backend/scripts/bootstrap_cluster.sql`, `backend/scripts/bootstrap_database.sql`, `backend/scripts/make_scram_verifier.py`, `backend/alembic/versions/0001_roles_and_grants.py`, `backend/tests/db/conftest.py` (session fixture, guard), `backend/tests/db/test_isolation.py`, `backend/tests/db/test_guard.py`, `backend/tests/db/test_catalog.py` (catalog guard).
+
+## Amendment (2026-10-22): bootstrap split, grants as migrations
+
+Accepted with these changes. This amends steps 2 and 4 above and the implementation notes.
+
+**1. Three layers, each with its own owner and frequency**
+
+| Layer | What | Who runs it | Frequency |
+|---|---|---|---|
+| Cluster bootstrap (`bootstrap_cluster.sql`) | Roles, role attributes, passwords (SCRAM verifiers), membership of the migration role in the definer roles | Cluster admin (local: Docker `postgres`; hosted: provider owner) | Once per cluster |
+| Database bootstrap (`bootstrap_database.sql`) | `REVOKE CONNECT, TEMP ON DATABASE FROM PUBLIC`; `GRANT CONNECT` to `migration_role`, `app_user`, `worker_user`; `REVOKE ALL ON SCHEMA public FROM PUBLIC`; `CREATE SCHEMA IF NOT EXISTS grounded AUTHORIZATION migration_role`; per-database role `search_path` | Cluster admin (only the database owner or a superuser can grant `CONNECT`) | Once per database. The test fixture runs it for every fresh test database. |
+| Migrations (Alembic) | Tables, RLS, functions, triggers, and every table, column and function grant (`0001_roles_and_grants`) | `migration_role` | Every upgrade |
+
+Grants are migrations, so they are reviewed, versioned and re-applied on every fresh test database by `alembic upgrade head`.
+
+**2. Passwords never reach the command line, the server log or the process list.**
+- A helper, `make_scram_verifier.py`, reads the plaintext with `getpass` (no echo) and prints a **SCRAM-SHA-256 verifier**. The verifier is computed client-side: `SaltedPassword = PBKDF2-HMAC-SHA256(password, salt, 4096)`, `ClientKey = HMAC(SaltedPassword, "Client Key")`, `StoredKey = SHA-256(ClientKey)`, `ServerKey = HMAC(SaltedPassword, "Server Key")`, stored as `SCRAM-SHA-256$4096:<salt>$<StoredKey>:<ServerKey>`. PostgreSQL 17 stores a SCRAM string given to `ALTER ROLE ... PASSWORD` as-is, so the plaintext never leaves the client.
+- The verifier is passed to psql as an environment variable. `bootstrap_cluster.sql` reads it with `\getenv`, not `-v`.
+- Only the verifier reaches the server. Its statement can still appear in server logs if statement logging is on. Logging is checked per host (RUNBOOK).
+- Passwords are ASCII only, so SASLprep normalisation can't change them.
+
+**3. Running psql.** Locally: `docker compose exec` into the `postgres` service, so the psql client matches the server version (PostgreSQL 17). Environment variables are passed with `-e` and the script is piped on stdin (`-f -`). CI and the test fixture don't use Docker: the fixture computes verifiers in Python and runs the same statements through psycopg as the cluster admin.
+
+**4. Membership of definer roles.** PostgreSQL 17's `GRANT` takes one option per `WITH` clause, so the membership is two statements, not one:
+
+```sql
+GRANT auth_definer TO migration_role WITH INHERIT FALSE;
+GRANT auth_definer TO migration_role WITH SET TRUE;   -- keeps INHERIT FALSE (omitted options keep their value)
+```
+
+(The same for `retention_definer`.) `INHERIT FALSE` means the migration role doesn't pick up the definer roles' privileges automatically. `SET TRUE` lets it `SET ROLE` to them, which `ALTER FUNCTION ... OWNER TO` needs. Membership alone isn't enough, see point 5:
+
+**5. The new owner needs `CREATE` on the function's schema for the moment of the change.** So the function migration does: `GRANT CREATE ON SCHEMA grounded TO auth_definer` → `ALTER FUNCTION ... OWNER TO auth_definer` → `REVOKE CREATE ON SCHEMA grounded FROM auth_definer`, all in one transaction. The definer roles never keep `CREATE`.
+
+**6. Role search paths.** `app_user`, `worker_user` and `migration_role` get `search_path = grounded` per database (`ALTER ROLE ... IN DATABASE ... SET search_path`). Functions still pin their own `search_path` (ADR 0004).
+
+**7. Catalog guard test.** `test_catalog.py` runs on every session and fails if:
+- any table in schema `grounded` doesn't have RLS enabled **and** forced (`relrowsecurity` and `relforcerowsecurity`);
+- the grants in `information_schema` don't match `tests/db/expected_grants.json`;
+- any `SECURITY DEFINER` function in `grounded` lacks a pinned `search_path` (`proconfig`), or has `EXECUTE` for `PUBLIC` (`has_function_privilege('public', oid, 'EXECUTE')`).
+
+This turns the RLS and grant design into something CI checks, not just something written in a document.
 - CI: new job `backend-db` in `.github/workflows/ci.yml` with the service container and the three URLs. Pinned image tag, action SHAs pinned as per existing practice.
 - RUNBOOK: how to start docker compose and run `pytest -m db`.
 
@@ -135,3 +175,21 @@ Values are never committed. `.env.example` lists the names with placeholders (Se
 
 - ADR 0001 Monorepo Layout · ADR 0002 Dependency Managers · ADR 0003 Valkey
 - ADR 0004 Authentication (roles, grants, bootstrap) · ADR 0005 Database Access Layer (policies, `set_config`)
+
+## Second amendment (2026-10-22): one bootstrap path, libpq verifiers, real logins
+
+**1. Verifiers come from libpq, not from our code.** `grounded_answers/scram.py` calls `PGconn.encrypt_password(passwd, user, b"scram-sha-256")` in psycopg 3.3.6, which wraps libpq's `PQencryptPasswordConn`. The libpq docs say it takes a connection and uses the server's `password_encryption` only when no algorithm is given. Our code checks the input (ASCII, minimum 16 characters) and the output format. No hand-written PBKDF2 or SCRAM. The earlier hand-written derivation is removed.
+
+**2. One bootstrap path, everywhere.** CI and the operator run the same `bootstrap_cluster.sql` and `bootstrap_database.sql` with psql. The test fixture pipes the same files to psql. psql meta-commands (`\getenv`, `\if`) don't work through a Python driver, so psycopg is used only for the statements that need it (drop and create the database, read `pg_authid`, compute verifiers).
+
+**psql comes from the server image, not from the runner.** The GitHub ubuntu-24.04 readme lists a PostgreSQL 16.15 server and does not list a client. Rather than install an apt client (16 against our 17 server), the job runs psql inside the pinned `pgvector/pgvector:0.8.7-pg17` service container with `docker exec`. Version parity, and no apt step. The local equivalent is `docker compose exec`. Both are set through `PSQL_COMMAND`.
+
+**3. Passwords are random per session.** The fixture generates one random password per login role, computes its verifier, and passes verifiers to psql through the environment (`-e` flags). The fixed CI password is now used only for the cluster admin of the CI service container. `TEST_DATABASE_URL` is no longer configured: the fixture derives the `app_user`, `worker_user` and `migration_role` URLs from `TEST_ADMIN_DATABASE_URL`.
+
+**4. Login proves the verifier.** `test_login.py` logs in as each role over TCP with the matching password (real SCRAM), refuses a wrong password, and refuses the definer roles. `test_verifier.py` checks that the verifier stored in `pg_authid` equals the one libpq produced.
+
+**5. Catalog guard** (`test_catalog.py`): role attributes, PUBLIC privileges on the database and `public` schema, schema ownership, RLS (enabled and forced) on every table, `SECURITY DEFINER` search_path pinning and PUBLIC EXECUTE, and grants against `expected_grants.json`. The RLS and function checks are vacuous until the first tables and functions exist. `expected_grants.json` is `[]`, so any grant added later fails until the list is updated in review.
+
+**6. Migration naming.** The grants migration is the last migration in the sequence, after the tables, functions and triggers it grants on. The exact number is set when the migrations are written.
+
+**7. Redaction.** The fixture's error messages replace every verifier with `<redacted>`. The `DbHandle` dataclass excludes its URLs and passwords from `repr`.
