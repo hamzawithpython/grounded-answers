@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     database_url: PostgresDsn
     redis_url: RedisDsn
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
-    cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
+    # Dev host is 127.0.0.1 everywhere (see ADR 0004). localhost is a different
+    # host from 127.0.0.1, so cookies set by one are not sent to the other.
+    cors_origins: str = "http://127.0.0.1:3000"
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",

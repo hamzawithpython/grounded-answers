@@ -21,8 +21,22 @@ cp .env.example .env
 cd frontend
 npm install
 cp .env.example .env.local
-# Edit .env.local if needed (default: http://localhost:8000)
+# Edit .env.local if needed (default: http://127.0.0.1:8000)
 ```
+
+### Dev Host Rule (ADR 0004)
+
+Use **`127.0.0.1` everywhere in development**, not `localhost`:
+
+| Setting | Value |
+|---|---|
+| Frontend URL | `http://127.0.0.1:3000` (set by `npm run dev`, which runs `next dev -H 127.0.0.1`) |
+| API URL | `http://127.0.0.1:8000` (`NEXT_PUBLIC_API_URL` in `frontend/.env.local`) |
+| CORS | `CORS_ORIGINS=http://127.0.0.1:3000` in `backend/.env` |
+
+**Why:** the browser treats `localhost` and `127.0.0.1` as different hosts. A cookie set by one is not sent to the other, so login refresh would fail silently. Node also resolves `localhost` to `::1` first, while uvicorn binds `127.0.0.1`.
+
+If you already have a `backend/.env` with `CORS_ORIGINS` containing `localhost`, change it to the value above. Each developer updates their own local `.env` and `.env.local`, since they are git-ignored.
 
 ### Running Services
 
@@ -42,7 +56,7 @@ cd frontend
 npm run dev
 ```
 
-Visit http://localhost:3000 (frontend) and http://localhost:8000/health (backend).
+Visit http://127.0.0.1:3000 (frontend) and http://127.0.0.1:8000/health (backend). See Dev Host Rule above.
 
 ## Troubleshooting
 

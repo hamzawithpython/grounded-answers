@@ -25,9 +25,13 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.get_cors_origins(),
+        # Credentials let the browser send the refresh cookie (ADR 0004).
+        # Origins must be exact (never "*") when credentials are allowed.
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        # Only the methods and headers the API actually uses. Extend when a new
+        # endpoint needs one.
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
     @app.get("/health")
