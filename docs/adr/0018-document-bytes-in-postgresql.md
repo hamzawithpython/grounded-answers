@@ -97,6 +97,15 @@ Decided by the owner in the Step 2a review.
 
 **App-side upload condition.** `app_user` INSERT is allowed only for a version in status `queued`. A `ready`, `processing`, `failed`, `retired` or `purging` version cannot take new bytes. This is an addition beyond the original plan, and the owner approved it.
 
+## Amendment 2 (2026-10-23): the ObjectStore implementation (Step 2b)
+
+- **The interface** (`storage/object_store.py`) has four methods: `put`, `get`, `exists` and `delete`. Each takes the caller's transaction session (`None` for the fake) and the tenant and version ids. The storage key is never taken from the caller (decision P2).
+- **`PostgresObjectStore`** runs on the caller's session and never opens a connection. A database refusal (missing privilege, failed check, failed foreign key) becomes `ObjectRefused`. The driver's message is dropped, because it can carry the statement's parameters, and those hold ids.
+- **Delete is refused, not counted, for a version that is not `purging`.** RLS hides the bytes of other statuses, so a delete there would match 0 rows and read as success while the bytes stayed. The store checks the version's status first and refuses. A delete after the version row is gone returns 0, because the foreign key means no bytes can exist.
+- **`expect_rowcount_in`** (`rowcount.py`) accepts an allowed set of counts. The delete accepts `{0, 1}`. Any other count is an error.
+- **`InMemoryObjectStore`** is the fake for unit tests. It mirrors the database rules listed above. It has no transactions, so the rollback guarantee is tested only against PostgreSQL.
+- **The contract test** (`tests/db/test_object_store_contract.py`) runs each case against both implementations. A planted drift in the fake (allowing a delete on a non-purging version) failed 4 cases, and the fake was restored and verified.
+
 ## Related decisions
 
 - ADR 0007 (retention, purge steps, idempotent delete, backups)

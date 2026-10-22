@@ -32,6 +32,29 @@ def affected_rows(result: Result[Any]) -> int:
     return count
 
 
+def expect_rowcount_in(result: Result[Any], allowed: frozenset[int], operation: str) -> None:
+    """
+    Raise RowcountMismatchError unless the write affected a count in `allowed`.
+
+    Use it for idempotent writes where more than one count is a valid outcome, such as a delete
+    that is 0 when the row is already gone and 1 when it was removed (ADR 0018). Any other count
+    is still a failure.
+    """
+    if not isinstance(result, CursorResult):
+        raise TypeError("expect_rowcount_in needs the result of an UPDATE or DELETE")
+    actual = result.rowcount
+    if actual not in allowed:
+        logger.error(
+            "rowcount mismatch: %s affected %d rows, expected one of %s",
+            operation,
+            actual,
+            sorted(allowed),
+        )
+        raise RowcountMismatchError(
+            f"{operation} affected {actual} rows, expected one of {sorted(allowed)}"
+        )
+
+
 def expect_rowcount(result: Result[Any], expected: int, operation: str) -> None:
     """
     Raise RowcountMismatchError unless the write affected exactly `expected` rows.
