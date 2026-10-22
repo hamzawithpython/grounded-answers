@@ -18,10 +18,13 @@ def run_sql_file(
     dbname: str,
     env: Mapping[str, str],
     redact: list[str],
+    *,
+    variables: Mapping[str, str] | None = None,
 ) -> None:
     """Pipe one SQL file to psql. On failure, raise with stderr, redacting verifiers."""
+    extra = [arg for name, value in (variables or {}).items() for arg in ("-v", f"{name}={value}")]
     result = subprocess.run(  # noqa: S603 - PSQL_COMMAND is operator config from the env, not input (ADR 0006)
-        [*psql, "-X", "-U", "postgres", "-d", dbname, "-v", "ON_ERROR_STOP=1", "-f", "-"],
+        [*psql, "-X", "-U", "postgres", "-d", dbname, "-v", "ON_ERROR_STOP=1", *extra, "-f", "-"],
         input=sql_file.read_bytes(),
         env=dict(env),
         cwd=REPO_ROOT,
