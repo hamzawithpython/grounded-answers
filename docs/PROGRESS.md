@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 3, Step 1 built on `feat/admin-cli`, awaiting review and commit)
+**Last updated:** 2026-10-22 (Session 3, Step 2 built on `feat/orm-models`, awaiting review and commit)
 
 ## Session 2 status at a glance
 
@@ -58,7 +58,7 @@ Uploads need authentication, so Session 3 builds auth first. Ingestion and the p
    - Manual check on the dev DB passed (create-tenant, add-domain, list-domains, create-admin with hidden prompts, mismatch refused, duplicate slug refused, wrong domain refused).
    - Dev tenant `indus-freight` (domain `indusfreight.example`, first admin `hr.manager@indusfreight.example`) now exists in the dev database.
    - `demo-data/` (Indus Freight Lines demo documents) is the owner's work. It is not in these commits; it goes on branch `data/demo-tenant` later. No migration added: migration 0003 already covers `migration_role` writes.
-2. **`begin_tenant_transaction` helper** (ADR 0005), R8 tests (pooled-connection leak, `lazy="raise"`), first ORM models with deferred `password_hash`, rowcount check on writes with a test (R9).
+2. ✅ **ORM models, tenant transaction, R8, rowcount** (ADR 0005, ADR 0011; built on `feat/orm-models`, awaiting review). Nine models mirror the migrations (names checked by Alembic's comparison). Reviewed CHECK list in `tests/db/expected_checks.json` (name and definition). `begin_tenant_transaction` and `make_tenant_session` (dependency, `scope="function"`). R8 tests: pooled-connection leak on one physical connection (commit, rollback, error), statement order, `lazy="raise"`, deferred `password_hash`. `expect_rowcount` (R9). Tests: unit 85 passing, DB 116 passing. Mutation checks: planted drift and session-scope `set_config` are both caught. The admin CLI stays on explicit SQL (decision, not an oversight).
 3. **Auth endpoints** (ADR 0004): login, refresh (rotation, reuse detection, 10 s grace), logout, logout-all, EdDSA keys with `kid`, lockout and rate limits in Valkey, generic errors with a dummy hash, audit entries, per-request membership and tenant-status checks. Tests for every rule in ADR 0004. Endpoint plan and key-management steps are reviewed before code.
 4. **Background job runner ADR** (for Session 4): compare Celery, arq, Dramatiq and RQ. No implementation in Session 3.
 
@@ -68,13 +68,14 @@ Each step has its own branch and stops for review. Nothing is committed on `main
 
 - An UPDATE or DELETE that RLS filters out affects **0 rows and raises no error**. Only a `WITH CHECK` violation raises (`InsufficientPrivilege`, "row-level security").
 - So the purge worker and every app write path must check `rowcount`. An unexpected 0 is a failure: log it and raise an alert. It is never treated as success.
-- Tests required with the first write path that depends on this: the purge worker's transitions, and each app UPDATE or DELETE. The worker transition tests already assert the 0-row behaviour (`tests/db/test_worker_policies.py`). The logging and alerting, and the app-side checks, are not built yet.
+- Tests required with the first write path that depends on this: the purge worker's transitions, and each app UPDATE or DELETE. The worker transition tests already assert the 0-row behaviour (`tests/db/test_worker_policies.py`).
+- **Built in Session 3, Step 2:** `expect_rowcount` (logs one line with the operation name and counts, never row data; raises `RowcountMismatchError`), tested on an RLS-filtered update. No app UPDATE or DELETE uses it yet, so every app write added from Step 3 must call it.
 
 ## Next session starts here
 
 1. Step 8 docs: SECURITY.md, RUNBOOK (`/ready`, rollback, branch protection applied), LEARNING_LOG, CHANGELOG (Step 7 entries added).
 2. Local `backend/.env`: `DATABASE_URL` as `app_user` only. `MIGRATION_DATABASE_URL` goes in the shell, never in `.env` (ADR 0004; `.env.example` and CHANGELOG say so). Dev database needs the operator bootstrap and `alembic upgrade head` (applies 0004) before `/ready` returns 200 and before the admin CLI runs.
-3. Session 3, Step 2: `begin_tenant_transaction`, R8 tests, first ORM models, rowcount pattern on writes (see the Session 3 plan above). The admin CLI's SQL moves to ORM models in Step 2, too.
+3. Session 3, Step 3: auth endpoints (see the Session 3 plan above). Step 2 is done (see below).
 
 ## Completed before Session 2
 

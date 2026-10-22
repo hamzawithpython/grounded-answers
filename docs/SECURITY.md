@@ -1,6 +1,6 @@
 # Security — Threat Model and Controls
 
-**Last updated:** 2026-10-22 (Session 3, Step 1: admin CLI, ADR 0010). Status words are used exactly:
+**Last updated:** 2026-10-22 (Session 3, Step 2: ORM models, tenant transaction helper, R8 tests; ADR 0011). Status words are used exactly:
 **Built + tested** (code exists and a test proves it), **Designed** (decided in an ADR, not yet
 in code), **Not started**.
 
@@ -90,8 +90,8 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 | T14 | Migration or bootstrap changes a live schema silently | Migrations are explicit SQL, applied in order, reversible; round-trip test; `EXPECTED_SCHEMA_HEAD` checked by `/ready` | Built + tested | `test_migration_round_trip`, `test_schema_head`, `test_ready` (`schema behind code`) |
 | T15 | Token forgery, algorithm confusion, refresh-token theft | EdDSA pinned, `kid` selects the key; refresh tokens hashed, rotated, with reuse detection and a 10 s grace window | Designed (ADR 0004) | No endpoints yet |
 | T16 | Password guessing and spraying | Lockout keyed on (email, IP), per-IP rate limit, progressive delay, generic 401, dummy Argon2 hash for unknown emails | Designed (ADR 0004) | No endpoints yet |
-| T17 | Tenant context leaks between pooled connections | `set_config(..., true)` as the first statement of every tenant transaction; `begin_tenant_transaction` helper | Designed (ADR 0005). **The leak test is not written.** | Required before the first tenant endpoint (ADR 0005 test list) |
-| T18 | Lazy loading returns a silent partial result | `lazy="raise"` on every relationship | Designed (ADR 0005). **No ORM models or test yet.** | Required with the first model |
+| T17 | Tenant context leaks between pooled connections | `set_config(..., true)` as the first two statements of every tenant transaction (tenant and user); `begin_tenant_transaction` is the only path; a source test forbids other setters; a fresh session per transaction | Built + tested | `test_tenant_transaction` (commit, rollback and mid-transaction error on one physical connection, `pg_backend_pid` checked; statement order and bound values), `test_tenant_context_source` (only `tenant_db.py` sets the context). The commit test fails if the helper uses session scope (checked by mutation). |
+| T18 | Lazy loading returns a silent partial result | `lazy="raise"` on every relationship; `deferred` on `users.password_hash` and `updated_at`; models mirror the migrations, checked by a drift test | Built + tested | `test_models` (every relationship is `lazy="raise"`; deferred columns; no CHECK in models), `test_orm_models` (unloaded relationship raises with no query; `select(User)` as app_user omits `password_hash`; explicit load refused), `test_orm_metadata` (Alembic comparison, plus CHECK names and definitions against `expected_checks.json`; planted drift is caught) |
 | T19 | Public readiness endpoint leaks internal details | 503 names only the dependency; log has exception class names only; 2 s cache limits load | Built + tested | `test_ready` (`test_failure_detail_is_logged_without_secrets`), `test_readiness_db` |
 | T20 | Brute-force or resource exhaustion on `/ready` | Result cached 2 s; checks under 1 s timeout each and a 2 s budget | Built + tested | `test_ready` (`test_repeated_calls_within_ttl_do_not_recheck`, timeout tests) |
 | T21 | Secrets committed to git | `.env` git-ignored; gitleaks in CI; test-only secrets marked as such | Built | CI `security` job |
@@ -107,7 +107,7 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 
 Four layers. A bug in one must not be enough to leak data.
 
-1. **Routes:** every tenant endpoint runs in a transaction that first sets `app.current_tenant` with `set_config(..., true)`. The setting ends at COMMIT or ROLLBACK, so a pooled connection never carries one request's tenant into the next. *(Designed; the helper is not written yet.)*
+1. **Routes:** every tenant endpoint runs in a transaction that first sets `app.current_tenant` and `app.current_user` with `set_config(..., true)`. The settings end at COMMIT or ROLLBACK, so a pooled connection never carries one request's tenant into the next. The helper is `begin_tenant_transaction` (Session 3, Step 2). The FastAPI dependency uses `scope="function"`, so the commit happens before the response is sent.
 2. **Policies (RLS):** every table has `ENABLE` and `FORCE ROW LEVEL SECURITY`. `USING` and `WITH CHECK` compare each row with the session tenant. No tenant set means no rows (fail closed).
 3. **Grants:** `app_user` and `worker_user` have column-level grants. Nothing grants access to the password hash or the token tables.
 4. **Tests:** the catalog test fails when a policy, grant, role attribute or function changes without a reviewed change to the expected lists.
@@ -158,8 +158,8 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R5 | A compromised worker can delete stored files | ADR 0007 | Worker has no identity or token access | Storage credentials scoped to `tenant/` prefixes |
 | R6 | `/ready` is public and reveals which dependency is down | ADR 0009 | Names only; no hosts, versions or messages | Accepted |
 | R7 | No second reviewer. Required approvals are 0, so one maintainer can merge a PR after its checks pass. A compromised maintainer account could push code that passes CI. | Process | Four required checks; admins enforced; no force pushes | Add a second reviewer and set required approvals back to 1 when a second maintainer joins |
-| R8 | Pooled-connection leak test and `lazy="raise"` test not written | ADR 0005 | Designed controls; no tenant endpoints exist yet | Write both with the first tenant endpoint and the first model |
-| R9 | Rowcount checks in app write paths are not built | PROGRESS carry-over | Worker transition tests assert 0-row behaviour; the admin CLI's domain removal refuses a 0-row delete (ADR 0010) | Build with the first app UPDATE or DELETE (Session 3) |
+| R8 | Pooled-connection leak test and `lazy="raise"` test not written | ADR 0005 | **Closed in Session 3, Step 2:** both tests are written and passing (T17, T18). | None |
+| R9 | Rowcount checks in app write paths are not built | PROGRESS carry-over | `expect_rowcount` helper built and tested (raises and logs a line with no data); the admin CLI's domain removal refuses a 0-row delete (ADR 0010); worker transition tests assert 0-row behaviour | Use `expect_rowcount` in every app UPDATE and DELETE as they are added (Session 3, Step 3 onward) |
 | R10 | Operator actions are not attributed to a person. Audit rows from the admin CLI have `actor_user_id = NULL`. | ADR 0010 | One operator; detail holds no personal data | Record the operator's identity when a second operator is added (new ADR) |
 
 ---
@@ -181,7 +181,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 
 - [x] Threat model written (Session 2)
 - [x] Tenant isolation tests passing (RLS verified, 90 DB tests)
-- [ ] Pooled-connection leak test and `lazy="raise"` test (R8)
+- [x] Pooled-connection leak test and `lazy="raise"` test (R8, Session 3 Step 2)
 - [ ] Authentication endpoints built and tested (ADR 0004)
 - [ ] Braces vulnerability patched or replaced
 - [ ] Rate limiting deployed

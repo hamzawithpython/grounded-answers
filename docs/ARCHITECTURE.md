@@ -437,3 +437,44 @@ When it's created, the table will follow the same rules:
 - **Retention decision:** recorded in ADR 0007 (Proposed). Includes the purge worker design, the backup limitation and the open question on the 30-day default.
 - **Backups:** purge removes live data, not backup copies. The backup retention window depends on the hosting provider and must be recorded in SECURITY.md and RUNBOOK when the host is chosen.
 - **SPEC §6.1:** proposed update for retention and deletion is in the ADR 0007 review. It needs approval before it's applied.
+
+## 9. Data access layer (Session 3, Step 2)
+
+ADR 0005 and ADR 0011 are the sources. The code is in `backend/src/grounded_answers/`:
+`models.py` (ORM mirror of the tables), `tenant_db.py` (the only way to start a tenant
+transaction), `rowcount.py` (write checks, SECURITY R9), `database.py` (engine and session factory).
+
+### 9.1 One tenant transaction
+
+```mermaid
+sequenceDiagram
+    participant R as Route (scope="function")
+    participant H as begin_tenant_transaction
+    participant P as Pool (one connection in tests)
+    participant DB as PostgreSQL (app_user, RLS)
+    R->>H: context (tenant_id, user_id)
+    H->>P: new session, BEGIN
+    H->>DB: set_config('app.current_tenant', $1, true), set_config('app.current_user', $2, true)
+    R->>DB: queries (filtered by RLS)
+    alt handler returns
+        H->>DB: COMMIT (before the response is sent)
+        H->>P: connection back to pool, settings gone
+    else exception or failed commit
+        H->>DB: ROLLBACK, settings gone
+        H-->>R: exception (500)
+    end
+```
+
+### 9.2 Rules
+
+| Rule | Enforced by |
+|---|---|
+| Only `begin_tenant_transaction` sets the tenant or user context | `tests/test_tenant_context_source.py` |
+| Context values are transaction-local and bound | `tests/db/test_tenant_transaction.py` (statement order and parameters) |
+| No tenant context survives a pooled connection's next transaction | `tests/db/test_tenant_transaction.py` (commit, rollback, error; same backend pid) |
+| Every relationship is `lazy="raise"` | `tests/test_models.py` |
+| `password_hash` and `updated_at` on users are deferred | `tests/test_models.py`, `tests/db/test_orm_models.py` |
+| Models and migrations agree on tables, columns, keys and indexes | `tests/db/test_orm_metadata.py` (Alembic comparison) |
+| Models and migrations agree on CHECK names and definitions | `tests/db/test_orm_metadata.py` (`expected_checks.json`) |
+| A failed commit is a server error, not a success | `tests/db/test_tenant_dependency.py` |
+| A write that affects an unexpected number of rows is refused | `tests/db/test_rowcount.py` |

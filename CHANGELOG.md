@@ -15,11 +15,22 @@ Dependency and tooling changes are listed here too.
 - Repository made public. Branch protection on `main` applied and verified through the API (T24).
 
 ### Fixed
+- `alembic/env.py` no longer silences existing loggers (`disable_existing_loggers=False`). The default
+  disabled every app logger that existed when migrations ran in the same process (Session 3, Step 2).
 - `backend/.env.example` no longer contains `MIGRATION_DATABASE_URL`. The web app loads that file, and
   `Settings` forbids unknown keys, so the app failed at startup. Migration credentials now come from the
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 
 ### Added
+- Session 3, Step 2: ORM models for the nine tables (`models.py`), mirroring the migrations. Names checked
+  by Alembic's comparison; CHECK names and definitions in `tests/db/expected_checks.json`.
+- `tenant_db.py`: `begin_tenant_transaction` (the only way to start a tenant transaction; sets tenant and user
+  with `set_config(..., true)` as its first statements) and `make_tenant_session` (FastAPI dependency,
+  `scope="function"`, so the commit happens before the response). ADR 0011.
+- `rowcount.py`: `expect_rowcount` for UPDATE and DELETE (SECURITY R9). Logs no row data.
+- `database.py`: `create_session_factory` (`expire_on_commit=False`); the app lifespan sets `app.state.session_factory`.
+- Tests: pooled-connection leak on one physical connection (R8), `lazy="raise"`, deferred columns,
+  drift check, failed-commit behaviour, rowcount. Unit 85, DB 116 passing.
 - Session 3, Step 1: admin CLI (`python -m grounded_answers.admin_cli`, run with `uv run --group operator`).
   Commands: `create-tenant`, `add-domain`, `remove-domain`, `list-domains`, `create-admin`. Uses
   `migration_role` from the shell only; every command is one transaction with an audit row (ADR 0010).
