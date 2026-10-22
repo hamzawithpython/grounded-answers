@@ -161,24 +161,35 @@ npm run build
 
 ## Running Database Tests (ADR 0006)
 
-DB tests need the local PostgreSQL container (`docker compose up -d postgres`). They fail, never skip, when it is unavailable.
+DB tests run on their own PostgreSQL cluster, `postgres-test`, on port **5433**. The dev cluster is on 5432. Each test run resets the passwords of `migration_role`, `app_user` and `worker_user` on the cluster it targets. So the test admin URL must never point at the dev cluster. The guard (`tests/db/guard.py`) refuses an admin URL on the same host and port as a dev URL (dev URLs come from `backend\.env`).
+
+DB tests fail, never skip, when the test cluster is unavailable. Start it only when you run DB tests:
+
+```powershell
+cd C:\Users\Admin\Desktop\portfolio-v2\grounded-answers
+docker compose --profile test up -d postgres-test redis
+docker compose --profile test ps postgres-test
+```
+
+Expected: `postgres-test` shows `Up ... (healthy)`. Wait until it is healthy. Redis (Valkey) is needed for the readiness DB tests.
 
 ```powershell
 cd C:\Users\Admin\Desktop\portfolio-v2\grounded-answers\backend
 
-# Admin URL: the cluster admin, maintenance database 'postgres'. Used only by the test fixture.
-# Set it from backend\.env without printing it:
-$admin = (Get-Content .env | Where-Object { $_ -like 'DATABASE_URL=*' }) -replace '^DATABASE_URL=', ''
-$env:TEST_ADMIN_DATABASE_URL = $admin -replace '^postgresql\+psycopg://', 'postgresql://' -replace '/grounded_answers$', '/postgres'
+# Admin URL for the TEST cluster (port 5433, maintenance database 'postgres').
+# Built from the root .env without printing the password:
+$t = @{}
+Get-Content ..\.env | ForEach-Object { if ($_ -match '^(TEST_POSTGRES_USER|TEST_POSTGRES_PASSWORD)=(.*)$') { $t[$matches[1]] = $matches[2] } }
+$env:TEST_ADMIN_DATABASE_URL = "postgresql://$($t.TEST_POSTGRES_USER):$($t.TEST_POSTGRES_PASSWORD)@127.0.0.1:5433/postgres"
 
-# psql runs inside the same PostgreSQL 17 container as the server.
-$env:PSQL_COMMAND = 'docker compose exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres psql'
+# psql runs inside the test cluster's container (same PostgreSQL 17 image as the server).
+$env:PSQL_COMMAND = 'docker compose --profile test exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres-test psql'
 
 uv run pytest -m db -v          # database tests
 uv run pytest -m "not db"       # unit tests (no database needed)
 ```
 
-The fixture drops and recreates `grounded_answers_test` only. The guard (`tests/db/guard.py`) refuses any other target before it connects.
+The fixture drops and recreates `grounded_answers_test` on the test cluster only. The guard refuses any other target before it connects.
 
 **Operator bootstrap (manual, same SQL the tests run).** Passwords are typed at a hidden prompt and never appear on the command line:
 
@@ -190,7 +201,7 @@ Get-Content -Raw backend\scripts\bootstrap_cluster.sql | docker compose exec -T 
 Get-Content -Raw backend\scripts\bootstrap_database.sql | docker compose exec -T postgres psql -U postgres -d grounded_answers -v ON_ERROR_STOP=1 -f -
 ```
 
-`BOOTSTRAP_ADMIN_URL` must be set for `make_scram_verifier.py` (same value as `TEST_ADMIN_DATABASE_URL`, pointing at `postgres`).
+`BOOTSTRAP_ADMIN_URL` must be set for `make_scram_verifier.py`. It is the **dev** cluster's superuser on the maintenance database (`postgresql://postgres:<password>@127.0.0.1:5432/postgres`). The bootstrap runs only against the dev cluster, and the test cluster has its own bootstrap, run by the test fixture.
 
 ## Deployment
 

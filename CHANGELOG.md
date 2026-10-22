@@ -18,8 +18,15 @@ Dependency and tooling changes are listed here too.
   now runs with `--loop grounded_answers.runtime:selector_loop_factory` (RUNBOOK). Loop check for the
   database engine (added with the engine in Session 2, Step 3).
 - Dependabot: 7-day cooldown on uv, npm and github-actions (version updates only).
+- `GET /ready` (ADR 0009): checks PostgreSQL as app_user, Valkey PING and the schema head, concurrently,
+  with per-check timeouts, an overall budget and a 2 s result cache. 503 names only the failed dependency.
+- ADR 0008: `redis` (redis-py 8.1.0, MIT) as the Valkey client.
+- Migration 0004: app_user can read `alembic_version.version_num` only (the one catalog-guard exception).
+- `EXPECTED_SCHEMA_HEAD` with a test that ties it to Alembic's newest migration.
+- CI: Valkey 9.1.2 service container in the `backend-db` job.
 
 ### Changed
+- `backend/.env.example`: `DATABASE_URL` is now `app_user`; added `MIGRATION_DATABASE_URL` (migration role).
 - Spec: SPEC §4 platform owner operations (create tenants, cross-tenant evals) run via an admin CLI using
   the migration role, not the web app (ADR 0004).
 - Dev host is `127.0.0.1` for frontend and API (`next dev -H 127.0.0.1`, `CORS_ORIGINS` default, `.env.example`,
