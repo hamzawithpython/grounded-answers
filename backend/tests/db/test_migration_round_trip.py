@@ -35,6 +35,7 @@ SCRIPTS_DIR = BACKEND_DIR / "scripts"
 
 EXPECTED_TABLES = {
     "audit_log",
+    "document_blobs",
     "document_versions",
     "documents",
     "password_reset_tokens",

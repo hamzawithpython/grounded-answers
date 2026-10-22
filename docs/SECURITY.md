@@ -171,7 +171,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R2 | An admin can probe which emails exist (the global unique email is an oracle) | ADR 0004 | Generic error; each attempt audited | Rate limit on the create endpoint (with the endpoint) |
 | R3 | Deleted content stays in backups after purge | ADR 0007 | Stated here and in RUNBOOK | Record the backup window when a host is chosen; restore procedure (above) |
 | R4 | No legal hold: a document under hold cannot outlive its purge date | ADR 0007 | None in v1 | New ADR if needed |
-| R5 | A compromised worker can delete stored files | ADR 0007 | Worker has no identity or token access | Storage credentials scoped to `tenant/` prefixes |
+| R5 | A compromised worker can delete stored files | ADR 0007, ADR 0018 | No storage credentials exist: bytes are in PostgreSQL. The worker has no identity or token access, and can DELETE only `purging` bytes in its own tenant (RLS, migration 0007). | Accepted for v1 (ADR 0018). A compromised worker can remove purging bytes of its tenant. It cannot read `ready` bytes, and it cannot change them. |
 | R6 | `/ready` is public and reveals which dependency is down | ADR 0009 | Names only; no hosts, versions or messages | Accepted |
 | R7 | No second reviewer. Required approvals are 0, so one maintainer can merge a PR after its checks pass. A compromised maintainer account could push code that passes CI. | Process | Four required checks; admins enforced; no force pushes | Add a second reviewer and set required approvals back to 1 when a second maintainer joins |
 | R8 | Pooled-connection leak test and `lazy="raise"` test not written | ADR 0005 | **Closed in Session 3, Step 2:** both tests are written and passing (T17, T18). | None |
@@ -212,6 +212,9 @@ Passwords are never printed. Driver error messages are not logged, because they 
 - [ ] Audit logging tested end-to-end
 - [x] Branch protection on `main` in effect (T24; verified 2026-10-22). Required approvals 0 by choice for a solo maintainer (R7)
 - [ ] Backup retention window recorded and restore procedure written (R3)
+- [ ] Database storage limit checked and recorded. File bytes live in the database (ADR 0018), so its size grows with every stored version.
+- [ ] Backup size and window recorded. Backups hold the bytes, not only the rows (ADR 0018, R3).
+- [ ] Host disk encryption at rest confirmed and recorded. The application does not encrypt the bytes (ADR 0018).
 - [ ] TLS/HTTPS enforced
 - [ ] Secrets manager (AWS Secrets, Vault, or similar) deployed
 - [ ] WAF (Web Application Firewall) configured

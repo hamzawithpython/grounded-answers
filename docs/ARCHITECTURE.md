@@ -241,6 +241,20 @@ Constraints: `UNIQUE (tenant_id, id)`.
 - **DOCX:** a ZIP archive (`PK\x03\x04`) that contains `[Content_Types].xml` and `word/document.xml`. The ZIP check alone would accept any ZIP.
 - **TXT and Markdown:** no magic bytes. The detector checks for valid UTF-8 with no NUL bytes. The `text/plain` vs `text/markdown` label comes from the extension allow-list, so it's a label, not a verified fact.
 
+### `document_blobs` (ADR 0018, migration 0007)
+
+The bytes of one document version. Kept apart so that normal document queries never read a file.
+
+| Column | Type | Constraints |
+|---|---|---|
+| tenant_id | uuid | PK (with version_id), FK `tenants` RESTRICT |
+| version_id | uuid | PK; composite FK `(tenant_id, version_id)` to `document_versions` RESTRICT |
+| content | bytea | NOT NULL (deferred in the ORM) |
+| byte_size | integer | CHECK 1 to 10485760; CHECK `octet_length(content) = byte_size` |
+| created_at | timestamptz | NOT NULL, default `now()` |
+
+Policies (ADR 0018, amendment): `app_user` INSERT only, for a `queued` version of its tenant. `worker_user` SELECT for `queued`, `processing` and `purging` versions. `worker_user` DELETE for `purging` versions. RLS is enabled and forced.
+
 ### `audit_log` (append-only)
 
 | Column | Type | Constraints |
@@ -355,7 +369,7 @@ For each due item, in this order (children first, because of RESTRICT):
 
 1. **Mark** versions `purging` in a transaction. Retrieval already excludes them.
 2. **Delete dependent data** (chunks and embeddings, from Session 3/4; see section 6).
-3. **Delete stored bytes** at `storage_key`. Idempotent: a missing object counts as deleted.
+3. **Delete the bytes row** in `document_blobs` for the version (ADR 0018). Idempotent: a missing row counts as deleted. This must run before the version row is deleted, because the foreign key is RESTRICT.
 4. **Delete the version row.** For a deleted document, first set `documents.current_version_id = NULL`.
 5. **Delete the document row** once it has no versions left.
 6. **Write audit entry** `document.purged` or `document_version.purged`, with `actor_user_id = NULL`, `tenant_id` set, and only counts in `detail`, for example `{"versions": 2, "chunks": 147, "bytes_deleted": true}`. No title, filename, hash or content.
@@ -434,7 +448,7 @@ When it's created, the table will follow the same rules:
 ## 8. Open items
 
 - **Chunks table:** deferred to Session 3/4, pending the embedding model decision.
-- **Document storage backend:** `storage_key` is a logical key. The backend (local disk or object storage) is decided later.
+- **Document storage backend:** decided in ADR 0018. Bytes are stored in PostgreSQL (`document_blobs`) behind an `ObjectStore` interface. Backblaze B2 is the recorded scale-up path. `storage_key` stays the logical key.
 - **Retention decision:** recorded in ADR 0007 (Proposed). Includes the purge worker design, the backup limitation and the open question on the 30-day default.
 - **Backups:** purge removes live data, not backup copies. The backup retention window depends on the hosting provider and must be recorded in SECURITY.md and RUNBOOK when the host is chosen.
 - **SPEC §6.1:** proposed update for retention and deletion is in the ADR 0007 review. It needs approval before it's applied.
