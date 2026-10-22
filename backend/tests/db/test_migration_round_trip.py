@@ -22,6 +22,7 @@ from alembic.config import Config
 from psycopg import sql
 
 from alembic import command
+from grounded_answers.readiness import EXPECTED_SCHEMA_HEAD
 
 from .database import DbHandle
 from .guard import ROUNDTRIP_DB_NAME, check_scratch_database, check_targets
@@ -43,7 +44,7 @@ EXPECTED_TABLES = {
     "tenants",
     "users",
 }
-EXPECTED_HEAD = "0003_policies_and_definers"
+EXPECTED_HEAD = EXPECTED_SCHEMA_HEAD
 
 
 def _url_for_db(admin_url: str, dbname: str, user: str, password: str | None) -> str:
