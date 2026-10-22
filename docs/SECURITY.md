@@ -177,6 +177,8 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R16 | Deliberate lockout: an attacker who knows an email can lock it for 24 hours using 50 failures. | ADR 0014 | The lock is bounded to 24 h; the operator unlocks at once with `unlock-account` (audited). | Accepted |
 | R9 | Rowcount checks in app write paths are not built | PROGRESS carry-over | `expect_rowcount` helper built and tested (raises and logs a line with no data); the admin CLI's domain removal refuses a 0-row delete (ADR 0010); worker transition tests assert 0-row behaviour | Use `expect_rowcount` in every app UPDATE and DELETE as they are added (Session 3, Step 3 onward) |
 | R10 | Operator actions are not attributed to a person. Audit rows from the admin CLI have `actor_user_id = NULL`. | ADR 0010 | One operator; detail holds no personal data | Record the operator's identity when a second operator is added (new ADR) |
+| R17 | Cross-tenant job rows. The queue has no RLS (ADR 0015). `worker_user` reads every job row. `app_user` reads every job id across tenants (the enqueue grant, ADR 0016). The ids reveal overall job volume, not content. | ADR 0015, ADR 0016 | Queue in its own schema (`queue`); grants are the reviewed list in `expected_queue_grants.json`; PUBLIC has none; `app_user` cannot read `args` (test). Argument format is checked by a test in Step 1b. | **Accepted by the owner (ADR 0016).** Argument-format test (Step 1b). |
+| R18 | Queue load on the database. Polling and job writes share the database with tenant traffic. | ADR 0015 | None yet | Measure in Session 4; move the queue to its own database if needed (new ADR) |
 
 ---
 

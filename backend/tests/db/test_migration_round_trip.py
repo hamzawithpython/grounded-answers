@@ -131,6 +131,17 @@ def test_upgrade_downgrade_upgrade_round_trip(grounded_db: DbHandle, roundtrip_d
                 "SELECT count(*) FROM pg_policies WHERE schemaname = 'grounded'"
             ).fetchone()
             assert policies == (0,), "downgrade base left policies behind"
+            # The queue schema is owned by the bootstrap and survives; its objects must not.
+            queue_left = admin.execute(
+                "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'queue' "
+                "UNION ALL SELECT p.proname FROM pg_proc p "
+                "JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'queue' "
+                "UNION ALL SELECT t.typname FROM pg_type t "
+                "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                "WHERE n.nspname = 'queue' AND t.typtype IN ('e', 'c')"
+            ).fetchall()
+            assert queue_left == [], f"downgrade base left queue objects behind: {queue_left}"
 
         command.upgrade(cfg, "head")
 

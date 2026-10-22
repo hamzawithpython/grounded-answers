@@ -30,15 +30,29 @@ BEGIN
 END
 $$;
 
+-- 3b. The job queue schema (ADR 0016), owned by migration_role. Created here, not in a
+--     migration, because migration_role has no CREATE privilege on the database.
+CREATE SCHEMA IF NOT EXISTS queue AUTHORIZATION migration_role;
+DO $$
+BEGIN
+  IF (SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname = 'queue')
+     <> 'migration_role' THEN
+    RAISE EXCEPTION 'schema queue exists but is not owned by migration_role';
+  END IF;
+END
+$$;
+
 -- 4. Per-database search_path. IN DATABASE keeps the setting scoped to this database,
---    because the grounded schema only exists in this one.
+--    because the grounded schema only exists in this one. app_user and worker_user also
+--    get queue, because Procrastinate's SQL uses unqualified names (ADR 0016). grounded
+--    stays first, so tenant tables resolve exactly as before.
 DO $$
 BEGIN
   EXECUTE format('ALTER ROLE migration_role IN DATABASE %I SET search_path = grounded',
                  current_database());
-  EXECUTE format('ALTER ROLE app_user IN DATABASE %I SET search_path = grounded',
+  EXECUTE format('ALTER ROLE app_user IN DATABASE %I SET search_path = grounded, queue',
                  current_database());
-  EXECUTE format('ALTER ROLE worker_user IN DATABASE %I SET search_path = grounded',
+  EXECUTE format('ALTER ROLE worker_user IN DATABASE %I SET search_path = grounded, queue',
                  current_database());
 END
 $$;

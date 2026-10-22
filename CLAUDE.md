@@ -21,6 +21,7 @@ Read `docs/SPEC.md` and `docs/PROGRESS.md` at the start of every session.
 5. When something fails: explain what happened, why it happened, and the exact next action.
    Do not repeat earlier steps unless needed.
 6. Work in small steps: one feature or module per step, then stop for my review.
+7. Never print a success message for a check unless the tool actually ran and its exit code was verified. If a tool is missing, say so and stop.
 
 ## Quality gates (never skip, never weaken)
 - No feature without tests. Run tests, lint, and type checks before saying a step is done.
