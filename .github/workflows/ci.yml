@@ -30,7 +30,7 @@ jobs:
       - run: uv run ruff format --check src/ tests/ scripts/ alembic/
       - run: uv run mypy src/ tests/ scripts/ alembic/
       - run: uv run --with pip-audit pip-audit
-      - run: uv run pytest -m "not db"
+      - run: uv run pytest -m "not db" -rs
 
   backend-db:
     runs-on: ubuntu-latest
@@ -79,7 +79,7 @@ jobs:
           cid=$(docker ps -q --filter ancestor=pgvector/pgvector:0.8.7-pg17 | head -n 1)
           if [ -z "$cid" ]; then echo "PostgreSQL service container not found"; exit 1; fi
           echo "PSQL_COMMAND=docker exec -i -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM -e ROLE_SCRAM $cid psql" >> "$GITHUB_ENV"
-      - run: uv run pytest -m db -v
+      - run: uv run pytest -m db -v -rs
 
   frontend:
     runs-on: ubuntu-latest
