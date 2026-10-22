@@ -129,6 +129,21 @@ confirmed in Session 4).
   loop factory as the API.
 - The app object is defined in a module, not in `__main__`. Procrastinate warns otherwise.
 
+### 9. The worker treats the job's tenant id as untrusted
+
+- A job carries a tenant id. The worker sets tenant context from it (`begin_worker_transaction`, the tenant
+  transaction helper with no user), then reads the document by id under that context.
+- Row-level security hides every row outside the context. So if the document is not found, either the id is
+  wrong or the tenant id is wrong. In both cases the job is refused.
+- **Refusal is a permanent failure.** The worker raises `DocumentNotFoundForTenant`, which is not in the task's
+  `retry_exceptions` list (Procrastinate's retry strategy retries only the listed types, per its retry docs).
+  The job is marked failed at once and is never retried.
+- **The log line holds no ids and no content:** `ingest.refused reason=document_not_in_tenant`. The job id is
+  recorded in Procrastinate's own job row, not in the log.
+- **Session 4 test (planned):** enqueue an ingestion job for a document of tenant A with tenant B's id. Run the
+  worker once. Assert: the document is unchanged, the job status is `failed`, the job ran exactly once (no retry),
+  and the captured log holds neither the document id nor the tenant ids.
+
 ## Consequences
 
 - **Positive:** a job cannot exist without the row that caused it, and a row cannot be committed without its job.

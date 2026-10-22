@@ -22,6 +22,9 @@ Dependency and tooling changes are listed here too.
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 
 ### Added
+- Session 3, Step 4: background job runner decided (ADR 0015): Procrastinate 3.10.0 on PostgreSQL. A throwaway
+  spike proved that a document row and its job commit or roll back together. Job arguments are ids only; delivery is
+  at least once, so every job is idempotent; the worker treats the job's tenant id as untrusted.
 - Session 3, Step 3c: login protection in Valkey (ADR 0014). Email+IP pair lock, per-IP limit, progressive
   delay per account, 24-hour hard lock released by `unlock-account`, refresh limit per IP. Atomic Lua counters,
   HMAC'd keys with expiry, fail closed on login and open on refresh (with logged warnings). Every login response
