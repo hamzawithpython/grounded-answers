@@ -183,7 +183,7 @@ Get-Content ..\.env | ForEach-Object { if ($_ -match '^(TEST_POSTGRES_USER|TEST_
 $env:TEST_ADMIN_DATABASE_URL = "postgresql://$($t.TEST_POSTGRES_USER):$($t.TEST_POSTGRES_PASSWORD)@127.0.0.1:5433/postgres"
 
 # psql runs inside the test cluster's container (same PostgreSQL 17 image as the server).
-$env:PSQL_COMMAND = 'docker compose --profile test exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres-test psql'
+$env:PSQL_COMMAND = 'docker compose --profile test exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM -e ROLE_SCRAM postgres-test psql'
 
 uv run pytest -m db -v          # database tests
 uv run pytest -m "not db"       # unit tests (no database needed)
@@ -191,17 +191,123 @@ uv run pytest -m "not db"       # unit tests (no database needed)
 
 The fixture drops and recreates `grounded_answers_test` on the test cluster only. The guard refuses any other target before it connects.
 
-**Operator bootstrap (manual, same SQL the tests run).** Passwords are typed at a hidden prompt and never appear on the command line:
+### Dev database bootstrap (first time, or after resetting the dev cluster)
+
+Same SQL the tests run (ADR 0006). Passwords are typed at a hidden prompt and never appear on the command line. Run from the repo root.
+
+**1. Start the dev cluster and Valkey.** `postgres` must show `(healthy)`.
+
+```powershell
+docker compose up -d postgres redis
+docker compose ps
+```
+
+**2. Set the bootstrap admin URL** (dev superuser, from the root `.env`, password not printed):
+
+```powershell
+$d = @{}
+Get-Content .env | ForEach-Object { if ($_ -match '^POSTGRES_PASSWORD=(.*)$') { $d.pw = $matches[1] } }
+$env:BOOTSTRAP_ADMIN_URL = "postgresql://postgres:$($d.pw)@127.0.0.1:5432/postgres"
+```
+
+**3. Set the role passwords.** Type each password twice at the hidden prompt. Keep them: `app_user` and `migration_role` go into `backend\.env` (step 7).
 
 ```powershell
 $env:APP_USER_SCRAM       = uv run --directory backend python scripts/make_scram_verifier.py app_user
 $env:WORKER_USER_SCRAM    = uv run --directory backend python scripts/make_scram_verifier.py worker_user
 $env:MIGRATION_ROLE_SCRAM = uv run --directory backend python scripts/make_scram_verifier.py migration_role
-Get-Content -Raw backend\scripts\bootstrap_cluster.sql | docker compose exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f -
-Get-Content -Raw backend\scripts\bootstrap_database.sql | docker compose exec -T postgres psql -U postgres -d grounded_answers -v ON_ERROR_STOP=1 -f -
 ```
 
-`BOOTSTRAP_ADMIN_URL` must be set for `make_scram_verifier.py`. It is the **dev** cluster's superuser on the maintenance database (`postgresql://postgres:<password>@127.0.0.1:5432/postgres`). The bootstrap runs only against the dev cluster, and the test cluster has its own bootstrap, run by the test fixture.
+**4. Cluster bootstrap** (roles and passwords). Expect `ALTER ROLE` and `GRANT` lines, no `ERROR`. Safe to re-run.
+
+```powershell
+Get-Content -Raw backend\scripts\bootstrap_cluster.sql | docker compose exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f -
+if ($LASTEXITCODE -ne 0) { throw "cluster bootstrap failed" }
+```
+
+**5. Database bootstrap** (CONNECT grants, schema). Expect `GRANT` and `CREATE` lines, no `ERROR`.
+
+```powershell
+Get-Content -Raw backend\scripts\bootstrap_database.sql | docker compose exec -T postgres psql -U postgres -d grounded_answers -v ON_ERROR_STOP=1 -f -
+if ($LASTEXITCODE -ne 0) { throw "database bootstrap failed" }
+```
+
+**6. Verify the three logins** (see "Verify login" below). Expect three `LOGIN OK` lines.
+
+```powershell
+uv run --directory backend python scripts/verify_login.py app_user worker_user migration_role
+```
+
+**7. Migrations to head.** First define `Set-MigrationUrl` in this shell (code in "Migration credentials" below). Expect the last migration line to be `Running upgrade ... -> 0004_alembic_version_grant`, exit code 0.
+
+```powershell
+Set-MigrationUrl
+uv run --directory backend alembic upgrade head
+Remove-Item Env:MIGRATION_DATABASE_URL
+docker compose exec -T postgres psql -U postgres -d grounded_answers -tAc "SELECT version_num FROM grounded.alembic_version"
+```
+
+The last command prints `0004_alembic_version_grant`.
+
+**8. Point `backend\.env` at the app role.** Use the `app_user` password from step 3. The file must not contain any migration credential.
+
+```
+DATABASE_URL=postgresql+psycopg://app_user:<app_user password>@127.0.0.1:5432/grounded_answers
+```
+
+Passwords must use only URL-safe characters (letters, digits, `-` and `_`). A character such as `@` or `:` breaks the URL.
+
+**9. Start the API and check readiness.** Terminal 1 runs the API; terminal 2 checks it.
+
+```powershell
+# terminal 1
+uv run --directory backend uvicorn grounded_answers.main:create_app --factory --loop grounded_answers.runtime:selector_loop_factory --port 8000
+
+# terminal 2
+curl.exe -i http://127.0.0.1:8000/ready
+```
+
+Expect `HTTP/1.1 200 OK` and `{"status":"ready"}`. On 503, the body names the failed dependency: `database` (check `DATABASE_URL` and the cluster), `cache` (Valkey is not running), or `schema` (step 7 did not finish).
+
+`BOOTSTRAP_ADMIN_URL` is the **dev** superuser only. The test cluster has its own bootstrap, run by the test fixture.
+
+### Migration credentials
+
+The web app loads `backend\.env` (ADR 0004). So migration credentials are never written to any file, and the app never sees them. `alembic/env.py` reads `MIGRATION_DATABASE_URL` from the process environment only. Set it in the shell, for one session, with a hidden prompt:
+
+```powershell
+function Set-MigrationUrl {
+    $secure = Read-Host "migration_role password" -AsSecureString
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    $env:MIGRATION_DATABASE_URL = "postgresql+psycopg://migration_role:$plain@127.0.0.1:5432/grounded_answers"
+}
+```
+
+Run `Set-MigrationUrl`, then the migration command, then `Remove-Item Env:MIGRATION_DATABASE_URL`. The variable lives only in that shell. Closing the window also removes it.
+
+### Verify login
+
+`scripts/verify_login.py` connects as each role, runs `SELECT 1`, and prints one line per role. The password is typed at a hidden prompt. Driver messages are not printed, because they can include hosts.
+
+```powershell
+uv run --directory backend python scripts/verify_login.py app_user worker_user migration_role
+```
+
+Expect `LOGIN OK app_user`, `LOGIN OK worker_user`, `LOGIN OK migration_role`, and exit code 0. A failure prints `LOGIN FAILED <role>: <error class> (sqlstate <code>)`. `28P01` means the password does not match the one in the cluster (see "Reset one role's password").
+
+### Reset one role's password
+
+Use this when one role's password is lost or wrong. It changes only that role. The script refuses any name except `migration_role`, `app_user` and `worker_user`.
+
+```powershell
+$env:ROLE_SCRAM = uv run --directory backend python scripts/make_scram_verifier.py app_user
+Get-Content -Raw backend\scripts\reset_role_password.sql | docker compose exec -T -e ROLE_SCRAM postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -v role=app_user -f -
+if ($LASTEXITCODE -ne 0) { throw "reset failed" }
+Remove-Item Env:ROLE_SCRAM
+uv run --directory backend python scripts/verify_login.py app_user
+```
+
+Expect `ALTER ROLE` from psql, then `LOGIN OK app_user`. Change `app_user` in both places to reset another role. If you reset `app_user`, update `backend\.env` (step 8).
 
 ## Deployment
 

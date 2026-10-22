@@ -5,7 +5,14 @@ Dependency and tooling changes are listed here too.
 
 ## [Unreleased]
 
+### Fixed
+- `backend/.env.example` no longer contains `MIGRATION_DATABASE_URL`. The web app loads that file, and
+  `Settings` forbids unknown keys, so the app failed at startup. Migration credentials now come from the
+  shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
+
 ### Added
+- `scripts/verify_login.py` (LOGIN OK per role) and `scripts/reset_role_password.sql` (one login role, allowlisted).
+  Both are documented in the RUNBOOK.
 - ADR 0004: authentication (self-built JWT in FastAPI; EdDSA access tokens; hashed, rotated refresh
   tokens; two read-only `SECURITY DEFINER` RLS exceptions; admin CLI for platform-owner work).
 - ADR 0005: async SQLAlchemy 2.1 with psycopg 3 and Alembic (SQLAlchemy locked to 2.1.5).
