@@ -22,6 +22,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 import click
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
@@ -31,6 +33,7 @@ from grounded_answers import admin_service
 from grounded_answers.admin_service import AdminError
 from grounded_answers.database import create_database_engine
 from grounded_answers.passwords import PasswordPolicyError, check_password_policy
+from grounded_answers.rate_limit import unlock_account, wall_clock_ms
 from grounded_answers.runtime import selector_loop_factory
 
 EXPECTED_ROLE = "migration_role"
@@ -175,6 +178,55 @@ def create_admin_command(tenant_slug: str, email: str, display_name: str) -> Non
         )
     )
     click.echo(f"Created tenant admin ({user_id}) for tenant '{tenant_slug}'.")
+
+
+@main.command("unlock-account")
+@click.argument("tenant_slug")
+@click.argument("email")
+def unlock_account_command(tenant_slug: str, email: str) -> None:
+    """
+    Clear the hard lock and the current-hour counters for EMAIL (ADR 0014).
+
+    Needs REDIS_URL and AUTH_RATE_LIMIT_HMAC_KEY in this shell, as the migration URL is. The CLI never
+    reads backend/.env. Valkey keys are removed first; if the audit row then fails, the command says so.
+    """
+    clean_email = _validated(admin_service.normalize_email, email)
+    rate_key = _shell_secret("AUTH_RATE_LIMIT_HMAC_KEY")
+    removed = _remove_lock_keys(rate_key, clean_email)
+    _run(
+        lambda s: admin_service.record_account_unlock(
+            s, tenant_slug=tenant_slug, keys_removed=removed
+        )
+    )
+    click.echo(f"Unlocked the account in tenant '{tenant_slug}'. Keys removed: {removed}.")
+
+
+def _shell_secret(name: str) -> bytes:
+    value = os.environ.get(name, "")
+    if len(value) < 32:
+        raise click.ClickException(f"{name} must be set in this shell, at least 32 characters.")
+    return value.encode("ascii")
+
+
+def _remove_lock_keys(rate_key: bytes, email: str) -> int:
+    """Delete the account's lock keys in Valkey. Errors name the problem, never the URL."""
+    url = os.environ.get("REDIS_URL")
+    if not url:
+        raise click.ClickException("REDIS_URL must be set in this shell.")
+
+    async def _go() -> int:
+        client = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            return await unlock_account(client, rate_key, email, wall_clock_ms())
+        finally:
+            await client.aclose()
+
+    try:
+        return asyncio.run(_go())
+    except RedisError as exc:
+        raise click.ClickException(
+            f"Valkey unavailable ({type(exc).__name__}). Nothing was unlocked."
+        ) from exc
 
 
 if __name__ == "__main__":

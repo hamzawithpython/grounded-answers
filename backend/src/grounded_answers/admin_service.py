@@ -86,7 +86,7 @@ async def _audit(
     tenant_id: uuid.UUID,
     action: str,
     target_type: str,
-    target_id: uuid.UUID,
+    target_id: uuid.UUID | None,
     detail: dict[str, str | int],
 ) -> None:
     await session.execute(
@@ -299,3 +299,21 @@ async def create_tenant_admin(
         detail={"role": "tenant_admin"},
     )
     return user_id
+
+
+async def record_account_unlock(
+    session: AsyncSession, *, tenant_slug: str, keys_removed: int
+) -> None:
+    """
+    Audit an operator unlock (ADR 0014). The detail holds the count of keys removed, never the email.
+    The Valkey keys are removed before this row is written. If this write fails, the CLI says so.
+    """
+    tenant_id = await _tenant_id_for_slug(session, normalize_slug(tenant_slug))
+    await _audit(
+        session,
+        tenant_id=tenant_id,
+        action="account.unlock",
+        target_type="account",
+        target_id=None,
+        detail={"keys_removed": keys_removed},
+    )

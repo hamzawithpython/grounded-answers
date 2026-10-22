@@ -44,7 +44,9 @@ from grounded_answers.auth_tokens import (
     verify_access_token,
 )
 from grounded_answers.config import get_settings
+from grounded_answers.rate_limit import FAIL_CLOSED_RETRY_SECONDS, LimiterUnavailable, LoginLimiter
 from grounded_answers.tenant_db import TenantContext, begin_tenant_transaction
+from grounded_answers.timing import TimingFloor
 
 logger = logging.getLogger("grounded_answers.auth")
 
@@ -131,10 +133,52 @@ AuthenticatedRequest = Annotated[
 ]
 
 
+LIMITED_MESSAGE = "Too many attempts. Try again later."
+UNAVAILABLE_MESSAGE = "Sign-in is temporarily unavailable. Try again shortly."
+
+
+def _limited(retry_after: int) -> JSONResponse:
+    # The same body and status for known and unknown emails (ADR 0014). Retry-After is the real remaining time.
+    return JSONResponse(
+        status_code=429,
+        content={"detail": LIMITED_MESSAGE},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _unavailable() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": UNAVAILABLE_MESSAGE},
+        headers={"Retry-After": str(FAIL_CLOSED_RETRY_SECONDS)},
+    )
+
+
 @router.post("/login", response_model=None)
 async def login_route(body: LoginRequest, request: Request) -> Response:
+    """Every return path waits for the timing floor (ADR 0014, R11), so the response time reveals nothing."""
+    timing: TimingFloor = request.app.state.timing
+    started = timing.start()
+    response = await _login_response(body, request)
+    await timing.hold(started)
+    return response
+
+
+async def _login_response(body: LoginRequest, request: Request) -> Response:
     state = request.app.state
-    client_ip = request.client.host if request.client is not None else "unknown"
+    limiter: LoginLimiter = state.limiter
+    client_ip = _client_ip(request)
+    email = body.email.strip().lower()
+
+    # Limits run before the lookup, for every email, so a known and an unknown email get the same answer.
+    try:
+        verdict = await limiter.check(email, client_ip)
+    except LimiterUnavailable:
+        logger.warning("login.limiter_unavailable action=fail_closed")
+        return _unavailable()
+    if verdict.refused:
+        return _limited(verdict.retry_after_seconds)
+
     try:
         result = await login(
             session_factory=state.session_factory,
@@ -146,7 +190,17 @@ async def login_route(body: LoginRequest, request: Request) -> Response:
             client_ip=client_ip,
         )
     except LoginFailed:
+        try:
+            await limiter.record_failure(email, client_ip)
+        except LimiterUnavailable:
+            logger.warning("login.limiter_unavailable action=fail_closed")
+            return _unavailable()
         return _login_failed()
+
+    try:
+        await limiter.reset_after_success(email, client_ip)
+    except LimiterUnavailable:
+        logger.warning("login.limiter_unavailable action=reset_skipped")
 
     response = JSONResponse(
         content={
@@ -204,6 +258,13 @@ def _client_ip(request: Request) -> str:
 async def refresh_route(request: Request) -> Response:
     _require_allowed_origin(request)
     state = request.app.state
+    try:
+        verdict = await state.limiter.check_refresh(_client_ip(request))
+        if verdict.refused:
+            return _limited(verdict.retry_after_seconds)
+    except LimiterUnavailable:
+        # Fail open for refresh (decision 7B): rotation and reuse detection still protect the token.
+        logger.warning("refresh.limiter_unavailable action=fail_open")
     try:
         result = await refresh(
             session_factory=state.session_factory,

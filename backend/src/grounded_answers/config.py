@@ -2,7 +2,7 @@ import functools
 from pathlib import Path
 from typing import Literal
 
-from pydantic import PostgresDsn, RedisDsn, SecretStr
+from pydantic import Field, PostgresDsn, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     auth_jwt_active_kid: str | None = None
     # Keys the HMAC'd client IP in the audit log (ADR 0004). Required at startup, never logged.
     auth_log_hmac_key: SecretStr | None = None
+    # Keys the Valkey limit keys (ADR 0014). Separate from the log key, so rotating one leaves the other.
+    auth_rate_limit_hmac_key: SecretStr | None = None
+    # Minimum duration of every login response, in milliseconds (ADR 0014, R11). Bounded so a typo
+    # cannot make logins instant (timing leak) or unusably slow.
+    auth_login_floor_ms: int = Field(default=500, ge=100, le=5000)
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",
