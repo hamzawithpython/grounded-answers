@@ -12,10 +12,9 @@ job is idempotent.
 """
 
 import asyncio
-import logging
 
 from grounded_answers.jobs.app import build_app
-from grounded_answers.jobs.logging_filter import redacted_stream_handler
+from grounded_answers.jobs.logging_filter import install_job_log_redaction
 from grounded_answers.runtime import selector_loop_factory
 from grounded_answers.worker_config import WorkerSettings
 
@@ -28,9 +27,7 @@ async def serve(app_conninfo: str) -> None:
 
 def main() -> None:
     settings = WorkerSettings()
-    root = logging.getLogger()
-    root.addHandler(redacted_stream_handler())
-    root.setLevel(logging.INFO)
+    install_job_log_redaction()
     asyncio.run(serve(str(settings.worker_database_url)), loop_factory=selector_loop_factory)
 
 

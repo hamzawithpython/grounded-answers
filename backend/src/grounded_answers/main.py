@@ -12,6 +12,7 @@ from grounded_answers.auth_api import router as auth_router
 from grounded_answers.auth_keys import KeyFileError, load_key_ring
 from grounded_answers.config import Settings, get_settings
 from grounded_answers.database import create_database_engine, create_session_factory
+from grounded_answers.jobs.logging_filter import install_job_log_redaction
 from grounded_answers.passwords import make_dummy_hash
 from grounded_answers.rate_limit import LoginLimiter, wall_clock_ms
 from grounded_answers.readiness import (
@@ -108,6 +109,9 @@ def create_app(readiness: ReadinessChecker | None = None) -> FastAPI:
     Pass `readiness` only in tests. Leave it None in production so the lifespan builds the
     real database engine and Valkey client.
     """
+    # The web app enqueues jobs, so its job log lines get the same argument redaction as the
+    # worker's (ADR 0017). Idempotent: repeated factory calls add no second handler.
+    install_job_log_redaction()
     app = FastAPI(
         title="Grounded Answers",
         description="Multi-tenant document Q&A assistant",
