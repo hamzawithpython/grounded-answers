@@ -12,6 +12,8 @@ from grounded_answers.auth_api import router as auth_router
 from grounded_answers.auth_keys import KeyFileError, load_key_ring
 from grounded_answers.config import Settings, get_settings
 from grounded_answers.database import create_database_engine, create_session_factory
+from grounded_answers.documents_api import router as documents_router
+from grounded_answers.jobs.app import build_app, conninfo_from_sqlalchemy_url
 from grounded_answers.jobs.logging_filter import install_job_log_redaction
 from grounded_answers.passwords import make_dummy_hash
 from grounded_answers.rate_limit import LoginLimiter, wall_clock_ms
@@ -21,7 +23,11 @@ from grounded_answers.readiness import (
     make_database_check,
     make_schema_check,
 )
+from grounded_answers.storage.postgres_store import PostgresObjectStore
 from grounded_answers.timing import TimingFloor
+from grounded_answers.upload.body_limit import UploadBodyLimit
+from grounded_answers.upload.limits import MAX_BODY_BYTES
+from grounded_answers.upload.rate import UploadLimiter
 
 
 async def _load_auth_state(app: FastAPI, settings: Settings, cache: Redis) -> None:
@@ -53,6 +59,7 @@ async def _load_auth_state(app: FastAPI, settings: Settings, cache: Redis) -> No
     app.state.cache = cache
     app.state.limiter = LoginLimiter(cache, rate_secret.encode("ascii"), wall_clock_ms)
     app.state.timing = TimingFloor(floor_seconds=settings.auth_login_floor_ms / 1000)
+    app.state.upload_limiter = UploadLimiter(cache, rate_secret.encode("ascii"), wall_clock_ms)
 
 
 def _make_lifespan(
@@ -78,6 +85,8 @@ def _make_lifespan(
         settings = get_settings()
         engine = create_database_engine(str(settings.database_url))
         app.state.session_factory = create_session_factory(engine)
+        app.state.object_store = PostgresObjectStore()
+        app.state.job_app = build_app(conninfo_from_sqlalchemy_url(str(settings.database_url)))
         cache = Redis.from_url(str(settings.redis_url))
         app.state.readiness = ReadinessChecker(
             {
@@ -148,6 +157,10 @@ def create_app(readiness: ReadinessChecker | None = None) -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": errors})
 
     app.include_router(auth_router)
+    app.include_router(documents_router)
+    # The body cap runs in front of every parser, so a large upload is refused while it streams
+    # (ADR 0019, decision D2). Only the upload path is limited.
+    app.add_middleware(UploadBodyLimit, path="/documents", max_bytes=MAX_BODY_BYTES)
 
     @app.get("/health")
     def health() -> dict[str, str]:

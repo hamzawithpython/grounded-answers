@@ -527,6 +527,16 @@ Never stop every `python.exe` process. A job that was running is halted, and it 
 
 **Migration 0006 (Session 4, Step 1b-i):** a worker cannot start without it, because the worker's startup calls the stalled-worker prune. Run `uv run alembic upgrade head` once after pulling this change.
 
+## Document upload switch (ADR 0019, Session 4 Step 3)
+
+`POST /documents` is off by default. It answers 404 until `UPLOAD_ENABLED=true` is set in the web app's environment. Keep it off until the ingestion worker runs the task `grounded.ingest_document` (Step 6). Otherwise uploads queue jobs that nothing runs.
+
+**Check it is off:** `curl -i -X POST http://127.0.0.1:8000/documents` returns `404` (with a valid token it still returns 404 while the switch is off).
+
+**Turn it on (only after Step 6 is merged and the worker runs):** set `UPLOAD_ENABLED=true` in `backend\.env`, restart the API, then upload one small `.txt` as a tenant admin and expect `201`.
+
+**Limits to know:** 10 MiB per file (streamed cap at 10 MiB + 64 KiB), 60 attempts per tenant and 20 per user per hour, `429` with `Retry-After` when exceeded, `503` when Valkey is down (fail closed).
+
 ## Rollback
 
 Two things roll back separately: the application and the database schema.
