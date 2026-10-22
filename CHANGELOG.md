@@ -20,6 +20,15 @@ Dependency and tooling changes are listed here too.
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 
 ### Added
+- Session 3, Step 1: admin CLI (`python -m grounded_answers.admin_cli`, run with `uv run --group operator`).
+  Commands: `create-tenant`, `add-domain`, `remove-domain`, `list-domains`, `create-admin`. Uses
+  `migration_role` from the shell only; every command is one transaction with an audit row (ADR 0010).
+  `create-admin` checks the tenant and the email domain before it asks for a password.
+- `grounded_answers/passwords.py`: password policy (12 to 256 characters, 10k common-password list) and
+  Argon2id hashing with the pinned library defaults (ADR 0010). List vendored from SecLists (MIT), see `data/README.md`.
+- Dependencies: `argon2-cffi>=25.1.0` (runtime, ADR 0004); `click>=8.5.0` in the `operator` group (ADR 0010).
+  Transitive: `argon2-cffi-bindings`, `cffi`, `pycparser`. CI installs the `operator` group.
+- ADR 0010: admin CLI (Click) and password hashing (argon2-cffi).
 - `scripts/verify_login.py` (LOGIN OK per role) and `scripts/reset_role_password.sql` (one login role, allowlisted).
   Both are documented in the RUNBOOK.
 - ADR 0004: authentication (self-built JWT in FastAPI; EdDSA access tokens; hashed, rotated refresh
