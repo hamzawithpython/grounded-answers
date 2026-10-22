@@ -465,6 +465,37 @@ The unit test `test_rotation_old_key_still_verifies_until_removed` covers this o
   requests from tools such as `curl.exe` unless they send `-H "Origin: http://127.0.0.1:3000"`.
 - `logout` and `logout-all` are idempotent: calling them again returns 204.
 
+### Login limits and the operator unlock (ADR 0014)
+
+- Login and refresh are limited in Valkey. Every refusal is `429` with `Retry-After` (seconds) and the body
+  `Too many attempts. Try again later.`, the same for known and unknown emails.
+- Login fails closed when Valkey is down: `503` with `Retry-After: 30` and a warning in the log
+  (`login.limiter_unavailable action=fail_closed`). Refresh fails open and logs `refresh.limiter_unavailable`.
+- The API refuses to start without `AUTH_RATE_LIMIT_HMAC_KEY` (32 characters or more). Create one the same way as
+  `AUTH_LOG_HMAC_KEY` and add it to `backend\.env`:
+  `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+- **Unlock an account** (after a deliberate lockout, or when a user is locked out by mistake). Set the Valkey URL
+  and the same key in this shell, then run:
+
+  ```powershell
+  $env:REDIS_URL = "redis://127.0.0.1:6379/0"
+  $env:AUTH_RATE_LIMIT_HMAC_KEY = "<the value from backend\.env>"
+  uv run --group operator python -m grounded_answers.admin_cli unlock-account indus-freight hr.manager@indusfreight.example
+  Remove-Item Env:AUTH_RATE_LIMIT_HMAC_KEY
+  ```
+
+  Expected: `Unlocked the account in tenant 'indus-freight'. Keys removed: <n>.` The unlock is audited as
+  `account.unlock` with the count of keys removed.
+- **Valkey flush drops every lock.** Do not flush Valkey casually (R15).
+- **Timing floor:** `AUTH_LOGIN_FLOOR_MS` (default 500, allowed 100 to 5000) sets the minimum duration of every login
+  response. If the log shows `login.timing_floor_exceeded`, the real work is slower than the floor on this machine:
+  raise the setting (up to 5000) and re-measure (ADR 0014, section 8). Until then, a known user's failure can be
+  timed apart from an unknown email's.
+- **Re-measure the timing floor** (ADR 0014, section 8) when hardware, the database or the Argon2 parameters change.
+  Run the login paths 40 times each and compare the worst case with the 500 ms floor in `timing.py`.
+- **Tests:** the Valkey tests use database 15 (`TEST_VALKEY_URL`, default `redis://127.0.0.1:6379/15`), flushed
+  before each test. They run in the `backend-db` CI job, which starts Valkey.
+
 ### Dev cookie check
 
 The refresh cookie is `__Secure-refresh`. Browsers keep it only when it carries `Secure`. Local development uses `http://127.0.0.1`. The browser test result and any change to the dev HTTPS setup are recorded in ADR 0012.

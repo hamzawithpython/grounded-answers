@@ -1,6 +1,6 @@
 # Security — Threat Model and Controls
 
-**Last updated:** 2026-10-22 (Session 3, Step 3b: refresh rotation, reuse detection, logout; ADR 0013). Status words are used exactly:
+**Last updated:** 2026-10-22 (Session 3, Step 3c: login protection in Valkey, timing floor; ADR 0014). Status words are used exactly:
 **Built + tested** (code exists and a test proves it), **Designed** (decided in an ADR, not yet
 in code), **Not started**.
 
@@ -89,7 +89,7 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 | T13 | Migration credentials reach the web app | Migration URL is shell-only; `Settings` forbids unknown keys; the example file is tested | Built + tested | `test_env_example` (`test_settings_rejects_unknown_key_in_env_file`) |
 | T14 | Migration or bootstrap changes a live schema silently | Migrations are explicit SQL, applied in order, reversible; round-trip test; `EXPECTED_SCHEMA_HEAD` checked by `/ready` | Built + tested | `test_migration_round_trip`, `test_schema_head`, `test_ready` (`schema behind code`) |
 | T15 | Token forgery, algorithm confusion, refresh-token theft | EdDSA pinned, `kid` selects the key, required claims, iss and aud checked (3a). Refresh tokens hashed; rotated on every use under a row lock; reuse after the 10-second grace window revokes the family; absolute 14-day family cap (3b, ADR 0013). | Built + tested (ADR 0012, ADR 0013) | `test_auth_tokens`, `test_auth_flows`, `test_auth_refresh` (`test_reuse_after_the_grace_window_revokes_the_family`, `test_two_concurrent_refreshes_with_one_token_rotate_exactly_once`, `test_rotated_cookie_max_age_is_the_time_left_to_the_family_cap`) |
-| T16 | Password guessing and spraying | Lockout keyed on (email, IP), per-IP rate limit, progressive delay, generic 401, dummy Argon2 hash for unknown emails | Designed (ADR 0004) | No endpoints yet |
+| T16 | Password guessing and spraying | Email+IP pair lock (5 failures, 15 min); per-IP limit (20 failures, 10 min); progressive delay per account (1 to 30 s); hard lock per account (50 failures, 24 h, operator release). Atomic Lua counters, HMAC'd keys, every key expires. Refused attempts are not counted. Dummy Argon2 hash for unknown emails. Limits run before the lookup, so known and unknown emails get the same answer. | Built + tested (ADR 0014) | `test_rate_limit` (concurrent failures counted exactly; pair lock per IP; progressive delay; hard lock and operator release; per-IP limit; keys hide raw values; keys expire), `test_auth_limits` (`test_fifty_failures_give_identical_responses_for_known_and_unknown_emails`, `test_valkey_down_fails_login_closed_with_a_logged_warning`), `test_auth_flows` (dummy hash path) |
 | T17 | Tenant context leaks between pooled connections | `set_config(..., true)` as the first two statements of every tenant transaction (tenant and user); `begin_tenant_transaction` is the only path; a source test forbids other setters; a fresh session per transaction | Built + tested | `test_tenant_transaction` (commit, rollback and mid-transaction error on one physical connection, `pg_backend_pid` checked; statement order and bound values), `test_tenant_context_source` (only `tenant_db.py` sets the context). The commit test fails if the helper uses session scope (checked by mutation). |
 | T18 | Lazy loading returns a silent partial result | `lazy="raise"` on every relationship; `deferred` on `users.password_hash` and `updated_at`; models mirror the migrations, checked by a drift test | Built + tested | `test_models` (every relationship is `lazy="raise"`; deferred columns; no CHECK in models), `test_orm_models` (unloaded relationship raises with no query; `select(User)` as app_user omits `password_hash`; explicit load refused), `test_orm_metadata` (Alembic comparison, plus CHECK names and definitions against `expected_checks.json`; planted drift is caught) |
 | T19 | Public readiness endpoint leaks internal details | 503 names only the dependency; log has exception class names only; 2 s cache limits load | Built + tested | `test_ready` (`test_failure_detail_is_logged_without_secrets`), `test_readiness_db` |
@@ -169,10 +169,12 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R6 | `/ready` is public and reveals which dependency is down | ADR 0009 | Names only; no hosts, versions or messages | Accepted |
 | R7 | No second reviewer. Required approvals are 0, so one maintainer can merge a PR after its checks pass. A compromised maintainer account could push code that passes CI. | Process | Four required checks; admins enforced; no force pushes | Add a second reviewer and set required approvals back to 1 when a second maintainer joins |
 | R8 | Pooled-connection leak test and `lazy="raise"` test not written | ADR 0005 | **Closed in Session 3, Step 2:** both tests are written and passing (T17, T18). | None |
-| R11 | Timing on known users: a failed login for a known user writes an audit row, an unknown email does not. A precise timing measurement could reveal which emails exist. | ADR 0012 | Verify runs on every path; generic body; only the audit write differs | Decide in 3c: a database write on the unknown path, or a fixed delay on every failure |
+| R11 | Timing on known users: a failed login for a known user writes an audit row, an unknown email does not. | ADR 0014 | Closed: every login response waits for a 500 ms floor, set above the measured worst case (299 ms) with margin. | Re-measure when hardware or Argon2 parameters change (ADR 0014 script). |
 | R12 | Keyed client IP uses the direct address. Behind a proxy, audit rows would show the proxy. | ADR 0012 | None needed while the API is not behind a proxy | Trusted `X-Forwarded-For` handling with hosting |
 | R13 | Grace window: a replayed token inside 10 seconds of its rotation gets 409 and does not revoke the family. | ADR 0004, ADR 0013 | Short window; the newest token is the only one that works | Accepted |
-| R14 | Refresh and login are not rate limited yet. | ADR 0004 | None yet | 3c |
+| R14 | Refresh and login are not rate limited per IP. | ADR 0014 | Closed: login limits per email and IP and per IP; refresh limited to 300 per IP per 10 minutes. | None |
+| R15 | A Valkey flush or restart drops every lock and counter, hard locks included. | ADR 0014 | Hosting must not flush Valkey casually. The limits rebuild on the next failures. | Revisit with hosting |
+| R16 | Deliberate lockout: an attacker who knows an email can lock it for 24 hours using 50 failures. | ADR 0014 | The lock is bounded to 24 h; the operator unlocks at once with `unlock-account` (audited). | Accepted |
 | R9 | Rowcount checks in app write paths are not built | PROGRESS carry-over | `expect_rowcount` helper built and tested (raises and logs a line with no data); the admin CLI's domain removal refuses a 0-row delete (ADR 0010); worker transition tests assert 0-row behaviour | Use `expect_rowcount` in every app UPDATE and DELETE as they are added (Session 3, Step 3 onward) |
 | R10 | Operator actions are not attributed to a person. Audit rows from the admin CLI have `actor_user_id = NULL`. | ADR 0010 | One operator; detail holds no personal data | Record the operator's identity when a second operator is added (new ADR) |
 
@@ -183,7 +185,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 - **Tenant isolation:** RLS with FORCE, fail-closed policies, column grants, tests (see table above)
 - **Secrets:** environment variables only; `.env` git-ignored; gitleaks in CI; SCRAM verifiers; test cluster separated by port and guard
 - **Input validation:** Pydantic `Settings` (unknown keys refused); password policy for database roles; account password policy (12 to 256 characters, common-password list, ADR 0010); admin CLI input checks before any database call (slug, domain, email, display name); file uploads size and type limited (Session 3)
-- **Rate limiting:** designed (ADR 0004); not built
+- **Rate limiting:** login and refresh limits in Valkey, atomic, HMAC'd keys, timing floor on login (ADR 0014); built and tested
 - **Audit logging:** `audit_log` table with an append-only grant for the app; the login and admin events are not yet written
 - **CORS:** allowlist of exact origins, no wildcard, credentials only for listed origins
 - **Dependencies:** SHA-pinned GitHub Actions; Dependabot with a 7-day cooldown; `pip-audit` and `npm audit` in CI
@@ -198,7 +200,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 - [x] Pooled-connection leak test and `lazy="raise"` test (R8, Session 3 Step 2)
 - [ ] Authentication endpoints built and tested (ADR 0004)
 - [ ] Braces vulnerability patched or replaced
-- [ ] Rate limiting deployed
+- [x] Rate limiting built and tested (ADR 0014); deployment settings pending hosting (R15)
 - [ ] Audit logging tested end-to-end
 - [x] Branch protection on `main` in effect (T24; verified 2026-10-22). Required approvals 0 by choice for a solo maintainer (R7)
 - [ ] Backup retention window recorded and restore procedure written (R3)

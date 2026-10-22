@@ -22,6 +22,11 @@ Dependency and tooling changes are listed here too.
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 
 ### Added
+- Session 3, Step 3c: login protection in Valkey (ADR 0014). Email+IP pair lock, per-IP limit, progressive
+  delay per account, 24-hour hard lock released by `unlock-account`, refresh limit per IP. Atomic Lua counters,
+  HMAC'd keys with expiry, fail closed on login and open on refresh (with logged warnings). Every login response
+  waits for a 500 ms floor (R11), set from a measured worst case of 299 ms. New setting `AUTH_RATE_LIMIT_HMAC_KEY`.
+  The operator CLI gains `unlock-account`.
 - Session 3, Step 3b: refresh rotation with reuse detection, logout and logout-all (ADR 0013). The rotation
   takes a row lock (`SELECT ... FOR UPDATE`), and a race test proves that two concurrent refreshes with one
   token rotate once. Reuse after the 10-second grace window revokes the family. Family lifetime is capped at

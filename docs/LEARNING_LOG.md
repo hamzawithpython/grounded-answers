@@ -570,3 +570,53 @@ A: With FastAPI's default scope, a 200, because the commit runs after the respon
 **Q: How did you know your leak test would catch the bug?**
 A: I planted the bug on purpose (session scope) and checked that the test failed. Two of the four tests did not
 catch it, and I wrote down why.
+
+---
+
+# Session 3, Step 3c: login protection in Valkey (2026-10-22)
+
+## Concepts in plain words
+
+### Atomic counter
+A count that stays correct when many requests change it at once. A plain read-then-write loses updates when two
+requests run together. A Lua script runs on the Valkey server as one step, so the increment and the lock decision
+cannot interleave.
+
+### Fixed window
+A counter that belongs to one time slot (the 10-minute slot that starts at 12:00, for example). It is simple and
+cheap. Its known weakness: a burst can straddle two slots, so it can admit up to twice the limit across a boundary.
+The IP limit accepts that trade-off and is recorded in the ADR.
+
+### Keyed hash (HMAC)
+A hash that needs a secret to compute. A plain hash of an IPv4 address can be reversed by trying all 4 billion
+addresses. A keyed hash cannot, without the key.
+
+### Timing floor
+Every login response waits until a fixed time has passed. A known user's failure does a database write that an
+unknown email does not, so the response time alone could reveal the account. The floor hides the difference, as long
+as the floor is longer than the slowest path. We measured the slowest path and set the floor with margin.
+
+### Fail closed versus fail open
+When a dependency is down, a fail-closed system refuses the request, and a fail-open system allows it. Login fails
+closed, because it is the path an attacker wants to brute-force. Refresh fails open, because token rotation already
+protects it. The choice belongs to each path, not to the whole system.
+
+## Interview Q&A
+
+**Q: Why does a counter need a Lua script rather than two commands?**
+A: Two commands (increment, then check) let two requests both read 4 and both decide the fifth failure has not happened
+yet. The script does both steps in one server-side call, so the count and the lock decision cannot be split.
+
+**Q: Why not put the hard lock in Postgres, which is durable?**
+A: A lock is only as good as its consistency across known and unknown emails. A Postgres row can only be written for a
+known user, so an unknown email would never get the same lock. Then the response would reveal which emails exist.
+Valkey keyed by HMAC gives both emails the same answer.
+
+**Q: Why is a refused attempt not counted?**
+A: If refused attempts counted, an attacker could keep a lock alive forever by continuing to try. The lock expires on
+its own schedule, and a refusal never extends it.
+
+**Q: How did you choose the timing floor?**
+A: I measured the real paths 40 times each. The slowest was 299 ms. I set 500 ms, which is about 200 ms above it. I
+recorded the numbers and the re-measurement rule in ADR 0014, because a faster or slower machine changes the answer.
+

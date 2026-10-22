@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 3, Step 3b built on `feat/auth-refresh`, awaiting review; not committed)
+**Last updated:** 2026-10-22 (Session 3, Step 3c built on `feat/auth-rate-limits`, awaiting review; not committed)
 
 ## Session 2 status at a glance
 
@@ -64,6 +64,12 @@ Uploads need authentication, so Session 3 builds auth first. Ingestion and the p
 
 Each step has its own branch and stops for review. Nothing is committed on `main`.
 
+## Later improvements (not yet scheduled)
+
+- **Separate `valkey-test` service in the test profile.** The test Valkey now shares the dev Valkey container, on
+  database 15, and the test fixture flushes that database. Postgres already has a separate `postgres-test`
+  service on port 5433. Mirror that for Valkey, so tests never touch the dev instance's data (ADR 0006 pattern).
+
 ## Session 3 carry-over: check rowcount on every RLS-filtered write
 
 - An UPDATE or DELETE that RLS filters out affects **0 rows and raises no error**. Only a `WITH CHECK` violation raises (`InsufficientPrivilege`, "row-level security").
@@ -75,7 +81,7 @@ Each step has its own branch and stops for review. Nothing is committed on `main
 
 1. Step 8 docs: SECURITY.md, RUNBOOK (`/ready`, rollback, branch protection applied), LEARNING_LOG, CHANGELOG (Step 7 entries added).
 2. Local `backend/.env`: `DATABASE_URL` as `app_user` only. `MIGRATION_DATABASE_URL` goes in the shell, never in `.env` (ADR 0004; `.env.example` and CHANGELOG say so). Dev database needs the operator bootstrap and `alembic upgrade head` (applies 0004) before `/ready` returns 200 and before the admin CLI runs.
-3. Session 3, Step 3b: refresh rotation with a row lock, reuse detection, absolute family cap, logout and logout-all, Origin check (ADR 0013). Built on `feat/auth-refresh`, awaiting review; not committed. Race test forced and planted-failure checked. Then 3c (lockout, rate limits, R11 timing decision).
+3. Session 3, Step 3c: login protection in Valkey, timing floor (setting `AUTH_LOGIN_FLOOR_MS`, default 500, with an overrun warning), unlock-account (ADR 0014). Built on `feat/auth-rate-limits`, awaiting review; not committed. Closes R11 and R14. Open for you: add `AUTH_RATE_LIMIT_HMAC_KEY` to `backend\.env` (the API will not start without it). Then the next step.
 
 ## Completed before Session 2
 

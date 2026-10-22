@@ -482,6 +482,13 @@ sequenceDiagram
 - Routes (`auth_api.py`): `POST /auth/refresh`, `POST /auth/logout` (both need an allowed Origin),
   `POST /auth/logout-all` (bearer token).
 
+### 9.2c Login protection (Session 3, Step 3c; ADR 0014)
+
+- `rate_limit.py`: `LoginLimiter` keeps the limits in Valkey. `RECORD_FAILURE_LUA` counts and locks in one
+  script. Keys are HMAC'd and expire.
+- `timing.py`: `TimingFloor`. Every login response waits until 500 ms have passed (R11).
+- Order on login: limit check (before the lookup), lookup, Argon2 verify, checks, then on failure record it.
+
 ### 9.3 Rules
 
 | Rule | Enforced by |
