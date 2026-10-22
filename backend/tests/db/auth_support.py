@@ -5,6 +5,8 @@ Registered for every DB test in tests/db/conftest.py, so test modules can reques
 `client` without importing them. Helpers that tests call directly are imported explicitly.
 """
 
+import ipaddress
+import itertools
 import os
 import secrets
 from collections.abc import Iterator
@@ -34,6 +36,21 @@ UNSIGNED_KEY: Any = None
 
 
 VALKEY_TEST_URL = os.environ.get("TEST_VALKEY_URL", "redis://127.0.0.1:6379/15")
+
+_BENCHMARK_NET = ipaddress.IPv4Network("198.18.0.0/15")  # RFC 2544 benchmarking, 131,072 addresses
+_ip_numbers = itertools.count(1)
+
+
+def new_test_ip() -> str:
+    """
+    Return an address that this test run has not returned before, from 198.18.0.0/15.
+
+    Use this for every client IP a test invents. Do not write a random helper: a random draw from a
+    small pool repeats (250 addresses repeated about 1 run in 250), and a repeated address is refused
+    by the pair lock. The benchmarking range is used because random public-looking addresses include
+    loopback, private and broadcast space, which trusted-proxy logic may treat differently later.
+    """
+    return str(_BENCHMARK_NET[next(_ip_numbers)])
 
 
 def flush_test_valkey() -> None:

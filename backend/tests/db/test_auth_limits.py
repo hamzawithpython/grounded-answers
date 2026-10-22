@@ -22,7 +22,7 @@ from grounded_answers import auth_api
 from grounded_answers.admin_cli import main as admin_main
 from grounded_answers.rate_limit import LoginLimiter
 from grounded_answers.timing import TimingFloor
-from tests.db.auth_support import VALKEY_TEST_URL, Accounts
+from tests.db.auth_support import VALKEY_TEST_URL, Accounts, new_test_ip
 from tests.db.database import DbHandle
 from tests.db.test_admin_cli import _url
 
@@ -64,14 +64,10 @@ def ips(monkeypatch: MonkeyPatch) -> Iterator[list[str]]:
     yield queue
 
 
-def _new_ip() -> str:
-    return f"198.51.100.{secrets.randbelow(250) + 1}"
-
-
 def _login(
     client: TestClient, ips: list[str], email: str, password: str, ip: str | None = None
 ) -> Any:
-    ips.insert(0, ip or _new_ip())
+    ips.insert(0, ip or new_test_ip())
     return client.post("/auth/login", json={"email": email, "password": password})
 
 
@@ -89,14 +85,14 @@ def test_fifty_failures_give_identical_responses_for_known_and_unknown_emails(
     """
     unknown = f"nobody-{secrets.token_hex(4)}@indus.test"
     for _ in range(10):
-        ip = _new_ip()
+        ip = new_test_ip()
         for _ in range(5):
             clock.advance(
                 31_000
             )  # past the 30 s cap, so the account delay never refuses a counted attempt
             for email in (accounts.admin_email, unknown):  # both emails at the same clock time
                 _login(client, ips, email, WRONG, ip=ip)
-    probe_ip = _new_ip()
+    probe_ip = new_test_ip()
     known = _login(client, ips, accounts.admin_email, WRONG, ip=probe_ip)
     missing = _login(client, ips, unknown, WRONG, ip=probe_ip)
     assert known.status_code == 429
@@ -108,14 +104,14 @@ def test_fifty_failures_give_identical_responses_for_known_and_unknown_emails(
 def test_a_locked_pair_is_refused_and_another_ip_is_not(
     client: TestClient, accounts: Accounts, clock: FrozenClock, ips: list[str]
 ) -> None:
-    ip = _new_ip()
+    ip = new_test_ip()
     for _ in range(5):
         _login(client, ips, accounts.admin_email, WRONG, ip=ip)
     locked = _login(client, ips, accounts.admin_email, WRONG, ip=ip)
     assert locked.status_code == 429
     assert locked.headers["retry-after"] == "900"
     clock.advance(1000)  # the account delay (1 s) applies to every IP; wait it out
-    other = _login(client, ips, accounts.admin_email, WRONG, ip=_new_ip())
+    other = _login(client, ips, accounts.admin_email, WRONG, ip=new_test_ip())
     assert other.status_code == 401
 
 
@@ -136,7 +132,7 @@ def test_progressive_delay_is_enforced_over_http(
 def test_success_resets_the_counters(
     client: TestClient, accounts: Accounts, clock: FrozenClock, ips: list[str]
 ) -> None:
-    ip = _new_ip()
+    ip = new_test_ip()
     for _ in range(4):
         _login(client, ips, accounts.admin_email, WRONG, ip=ip)
     ok = _login(client, ips, accounts.admin_email, accounts.password, ip=ip)
@@ -227,7 +223,7 @@ def test_operator_unlock_clears_the_hard_lock_and_audits_it(
 ) -> None:
     email = accounts.admin_email
     for _ in range(10):
-        ip = _new_ip()
+        ip = new_test_ip()
         for _ in range(5):
             _login(client, ips, email, WRONG, ip=ip)
     assert _login(client, ips, email, accounts.password).status_code == 429

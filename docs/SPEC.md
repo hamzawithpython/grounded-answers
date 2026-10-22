@@ -52,6 +52,7 @@ No WhatsApp. No phone/voice in v1.
 ### 6.1 Documents
 - Upload PDF, DOCX, TXT, Markdown. Max file size and allowed types enforced server-side.
 - Background ingestion: extract text → clean → split into chunks → create embeddings → store.
+  - Text extraction supports PDF (with a text layer), DOCX, Markdown and plain text. A PDF with no text layer (a scanned document) is refused with the failure reason "no text found". OCR is out of scope for v1.
 - Document versioning: replacing a document retires old chunks; answers always cite the current version.
 - Ingestion status visible to admins (queued / processing / ready / failed + reason).
 - **Deletion:** an admin can delete a document. A deleted document, and any replaced version, is excluded from answers as soon as the deletion is saved. Its content is permanently purged after a retention period (default 30 days, set per deployment). Restore is not supported in v1. (ADR 0007)

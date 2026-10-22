@@ -537,6 +537,30 @@ Never stop every `python.exe` process. A job that was running is halted, and it 
 
 **Limits to know:** 10 MiB per file (streamed cap at 10 MiB + 64 KiB), 60 attempts per tenant and 20 per user per hour, `429` with `Retry-After` when exceeded, `503` when Valkey is down (fail closed).
 
+## Text extraction limits (ADR 0020, Session 4 Step 4)
+
+Text is extracted in a child process with these limits:
+
+| Format | Timeout | Memory (Linux only) |
+|---|---|---|
+| PDF | 30 s | 1 GiB address space |
+| DOCX | 10 s | 1 GiB |
+| Markdown, text | 5 s | 1 GiB |
+
+Output is capped at 50 MiB. Every limit is checked by the parent, which kills the child's whole process tree.
+
+**Failure reasons** (the only four a document can produce; no document text is ever in them):
+- `timeout`: the child ran past its time limit.
+- `memory`: the child could not allocate (Linux only).
+- `unreadable`: the file is not a valid file of its type, or the parser failed.
+- `no_text`: the file parsed, but holds no text. A scanned PDF gives this (OCR is out of scope, SPEC §6.1).
+
+**Logs:** a failure logs one line, `extract.failed reason=... exception=<class name>`. Nothing from the child's stdout or stderr is logged.
+
+**Windows development:** the timeout and the output cap apply, but **there is no memory limit** on Windows (SECURITY R19). The memory test runs in the CI Linux job only, and it is skipped on Windows with that reason.
+
+**Check the Linux limit yourself:** run the extraction tests in a Linux container, as CI does. From `backend\` in PowerShell: `docker run --rm -v "${PWD}:/work" -w /work python:3.12-slim sh -c "pip install -q uv && UV_PROJECT_ENVIRONMENT=/tmp/venv uv run -q pytest tests/test_extract_sandbox.py -rs"`. Expected: all tests pass, with the Windows-only check skipped.
+
 ## Rollback
 
 Two things roll back separately: the application and the database schema.
