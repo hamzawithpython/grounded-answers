@@ -163,7 +163,8 @@ def test_bad_tokens_are_refused_with_the_generic_message(
     else:
         good = _forge(ring, **claims)
         head, payload, signature = good.split(".")
-        token = f"{head}.{payload}.{signature[:-1]}{'A' if signature[-1] != 'A' else 'B'}"
+        middle = len(signature) // 2
+        token = f"{head}.{payload}.{signature[:middle]}{'A' if signature[middle] != 'A' else 'B'}{signature[middle + 1 :]}"
     response = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 401
     assert response.json() == {"detail": "Not authenticated"}

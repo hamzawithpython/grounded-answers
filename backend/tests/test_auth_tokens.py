@@ -164,14 +164,23 @@ def test_hs256_signed_with_the_public_key_is_refused(ring: KeyRing) -> None:
         verify_access_token(f"{header}.{payload}.{signature}", ring)
 
 
+def _tamper_signature(token: str) -> str:
+    """
+    Change one character in the middle of the signature. The last character of a 64-byte signature carries
+    only two significant bits, so changing it can break base64 decoding and hide the signature check.
+    """
+    head, payload, signature = token.split(".")
+    middle = len(signature) // 2
+    replacement = "A" if signature[middle] != "A" else "B"
+    return f"{head}.{payload}.{signature[:middle]}{replacement}{signature[middle + 1 :]}"
+
+
 def test_tampered_signature_is_refused(ring: Any) -> None:
     token = issue_access_token(
         ring=ring, user_id=uuid.uuid4(), tenant_id=uuid.uuid4(), role_hint="employee"
     )
-    head, payload, signature = token.split(".")
-    flipped = "B" if signature[-1] == "A" else "A"
     with pytest.raises(InvalidAccessToken, match="InvalidSignatureError"):
-        verify_access_token(f"{head}.{payload}.{signature[:-1]}{flipped}", ring)
+        verify_access_token(_tamper_signature(token), ring)
 
 
 def test_token_without_a_required_claim_is_refused(ring: Any) -> None:
