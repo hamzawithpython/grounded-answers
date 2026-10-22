@@ -474,6 +474,14 @@ sequenceDiagram
 - Protected routes: `authenticated_context` verifies the token, opens the tenant transaction, and re-reads
   membership, user and tenant status from the database. Role comes from the row.
 
+### 9.2b Refresh and logout (Session 3, Step 3b; ADR 0013)
+
+- `auth_refresh.py`: the cookie is hashed and looked up, then the tenant transaction locks the token row with
+  `SELECT ... FOR UPDATE`. Decisions are made on the locked row. Writes are committed before any error reaches
+  the client.
+- Routes (`auth_api.py`): `POST /auth/refresh`, `POST /auth/logout` (both need an allowed Origin),
+  `POST /auth/logout-all` (bearer token).
+
 ### 9.3 Rules
 
 | Rule | Enforced by |

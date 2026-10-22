@@ -22,6 +22,11 @@ Dependency and tooling changes are listed here too.
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 
 ### Added
+- Session 3, Step 3b: refresh rotation with reuse detection, logout and logout-all (ADR 0013). The rotation
+  takes a row lock (`SELECT ... FOR UPDATE`), and a race test proves that two concurrent refreshes with one
+  token rotate once. Reuse after the 10-second grace window revokes the family. Family lifetime is capped at
+  14 days from its first token. `POST /auth/refresh` and `POST /auth/logout` require an allowed Origin.
+  `rowcount.affected_rows` added for writes that may legitimately affect zero rows.
 - Session 3, Step 3a: authentication. `POST /auth/login` (generic 401, byte-identical bodies), `GET /auth/me`
   (per-request membership, user and tenant checks; role from the database). EdDSA access tokens (15 minutes,
   pinned algorithm, kid, required claims, 5-second leeway). Refresh token issued and stored hashed; cookie

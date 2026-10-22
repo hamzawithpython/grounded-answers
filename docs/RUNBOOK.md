@@ -449,6 +449,22 @@ Startup fails with a message that names the setting, never its value, when the f
 
 The unit test `test_rotation_old_key_still_verifies_until_removed` covers this order.
 
+### Refresh and logout (ADR 0013)
+
+- `POST /auth/refresh` returns a new access token and a rotated `__Secure-refresh` cookie. Its `Max-Age` is
+  the time left to the family's 14-day cap, not a fresh 14 days.
+- **409 `refresh_in_progress`:** the same token was used less than 10 seconds ago, usually by a second tab.
+  Retry after the first request finishes. The cookie is not changed.
+- **401 with the cookie cleared:** the token is expired, revoked, unknown, or its family was revoked.
+- **Reuse:** a token used more than 10 seconds ago is presented again. The whole family is revoked. The audit
+  log shows `refresh.reuse_detected` with the number of tokens revoked. Ask the user to sign in again. Look for
+  a pattern before assuming theft.
+- **403 `Tenant access is suspended`:** the tenant is suspended. The family is revoked. Signing in again
+  fails until the tenant is reactivated.
+- Both `refresh` and `logout` refuse requests without an allowed `Origin` (403). This is expected for
+  requests from tools such as `curl.exe` unless they send `-H "Origin: http://127.0.0.1:3000"`.
+- `logout` and `logout-all` are idempotent: calling them again returns 204.
+
 ### Dev cookie check
 
 The refresh cookie is `__Secure-refresh`. Browsers keep it only when it carries `Secure`. Local development uses `http://127.0.0.1`. The browser test result and any change to the dev HTTPS setup are recorded in ADR 0012.

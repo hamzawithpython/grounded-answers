@@ -13,6 +13,7 @@ Responses:
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -20,12 +21,20 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from grounded_answers.auth_refresh import (
+    RefreshFailed,
+    RefreshInProgress,
+    logout,
+    logout_all,
+    refresh,
+)
 from grounded_answers.auth_service import (
     LOGIN_FAILED_MESSAGE,
     REFRESH_TOKEN_LIFETIME,
     LoginFailed,
     MembershipRejected,
     Principal,
+    hmac_client_ip,
     load_principal,
     login,
 )
@@ -34,6 +43,7 @@ from grounded_answers.auth_tokens import (
     InvalidAccessToken,
     verify_access_token,
 )
+from grounded_answers.config import get_settings
 from grounded_answers.tenant_db import TenantContext, begin_tenant_transaction
 
 logger = logging.getLogger("grounded_answers.auth")
@@ -164,3 +174,94 @@ async def me(ctx: AuthenticatedRequest) -> PrincipalResponse:
         tenant_id=str(ctx.principal.tenant_id),
         role=ctx.principal.role,
     )
+
+
+def _require_allowed_origin(request: Request) -> None:
+    """
+    CSRF check for the cookie-bearing POSTs (ADR 0004, D6B). The browser must send an Origin that is
+    on the CORS allowlist. A missing Origin is refused too: browsers send one on every cross-site POST.
+    """
+    origin = request.headers.get("origin")
+    if origin is None or origin not in get_settings().get_cors_origins():
+        raise HTTPException(status_code=403, detail="Origin not allowed")
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=REFRESH_COOKIE,
+        path=REFRESH_COOKIE_PATH,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client is not None else "unknown"
+
+
+@router.post("/refresh", response_model=None)
+async def refresh_route(request: Request) -> Response:
+    _require_allowed_origin(request)
+    state = request.app.state
+    try:
+        result = await refresh(
+            session_factory=state.session_factory,
+            ring=state.key_ring,
+            raw_refresh=request.cookies.get(REFRESH_COOKIE),
+            hmac_key=state.auth_hmac_key,
+            client_ip=_client_ip(request),
+        )
+    except RefreshInProgress:
+        # Presented again inside the grace window. The cookie stays: the first request already rotated it.
+        return JSONResponse(status_code=409, content={"detail": "refresh_in_progress"})
+    except RefreshFailed as exc:
+        response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        _clear_refresh_cookie(response)
+        return response
+
+    remaining = int((result.expires_at - datetime.now(UTC)).total_seconds())
+    response = JSONResponse(
+        content={
+            "access_token": result.access_token,
+            "token_type": "bearer",
+            "expires_in": int(ACCESS_TOKEN_LIFETIME.total_seconds()),
+        },
+    )
+    response.set_cookie(
+        key=REFRESH_COOKIE,
+        value=result.refresh_token,
+        max_age=remaining,
+        path=REFRESH_COOKIE_PATH,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@router.post("/logout", status_code=204, response_model=None)
+async def logout_route(request: Request) -> Response:
+    _require_allowed_origin(request)
+    state = request.app.state
+    await logout(
+        session_factory=state.session_factory,
+        raw_refresh=request.cookies.get(REFRESH_COOKIE),
+        hmac_key=state.auth_hmac_key,
+        client_ip=_client_ip(request),
+    )
+    response = Response(status_code=204)
+    _clear_refresh_cookie(response)
+    return response
+
+
+@router.post("/logout-all", status_code=204, response_model=None)
+async def logout_all_route(request: Request, ctx: AuthenticatedRequest) -> Response:
+    await logout_all(
+        ctx.session,
+        principal=ctx.principal,
+        ip_hmac=hmac_client_ip(request.app.state.auth_hmac_key, _client_ip(request)),
+    )
+    response = Response(status_code=204)
+    _clear_refresh_cookie(response)
+    return response

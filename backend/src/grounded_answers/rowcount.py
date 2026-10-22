@@ -21,6 +21,17 @@ class RowcountMismatchError(RuntimeError):
     """A write affected a different number of rows than the code expected."""
 
 
+def affected_rows(result: Result[Any]) -> int:
+    """
+    The number of rows an UPDATE or DELETE changed. Zero is a valid answer for idempotent writes,
+    such as revoking a family that is already revoked. Use expect_rowcount where zero is a failure.
+    """
+    if not isinstance(result, CursorResult):
+        raise TypeError("affected_rows needs the result of an UPDATE or DELETE")
+    count: int = result.rowcount
+    return count
+
+
 def expect_rowcount(result: Result[Any], expected: int, operation: str) -> None:
     """
     Raise RowcountMismatchError unless the write affected exactly `expected` rows.
