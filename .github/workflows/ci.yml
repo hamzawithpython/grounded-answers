@@ -52,6 +52,17 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        # Valkey, same pinned image as docker-compose.yml (ADR 0003, ADR 0009). The service is
+        # named "redis" because the app's REDIS_URL uses the redis:// scheme (ADR 0003).
+        image: valkey/valkey:9.1.2-alpine3.24
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       # Admin URL for the test fixture only: drop, create, bootstrap (ADR 0006).
       TEST_ADMIN_DATABASE_URL: postgresql://postgres:ci-test-only-not-a-secret@127.0.0.1:5432/postgres
