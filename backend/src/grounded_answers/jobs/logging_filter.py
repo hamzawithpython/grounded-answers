@@ -81,7 +81,33 @@ class RedactJobArguments(logging.Filter):
 
 
 def redacted_stream_handler(stream: Any = None) -> logging.Handler:
-    """A stream handler that applies the filter. The worker process installs this one."""
+    """A stream handler that applies the filter."""
     handler = logging.StreamHandler(stream)
     handler.addFilter(RedactJobArguments())
+    return handler
+
+
+# The loggers that carry job records: Procrastinate's own, and ours in the jobs package. Both the
+# worker and the web app (which enqueues) install the filter here, and nowhere else, so the
+# logging of the rest of the application is unchanged.
+JOB_LOGGERS = ("procrastinate", "grounded_answers.jobs")
+
+
+def install_job_log_redaction(stream: Any = None) -> logging.Handler:
+    """
+    Attach one redacting handler to each job logger, at INFO. Idempotent (ADR 0017).
+
+    If a redacting handler is already attached, it is returned and nothing is added. Otherwise a
+    new one is attached to every logger in JOB_LOGGERS. The handler is shared, so each record is
+    written once.
+    """
+    for name in JOB_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.INFO)
+        for handler in logger.handlers:
+            if any(isinstance(item, RedactJobArguments) for item in handler.filters):
+                return handler
+    handler = redacted_stream_handler(stream)
+    for name in JOB_LOGGERS:
+        logging.getLogger(name).addHandler(handler)
     return handler

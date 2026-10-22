@@ -59,6 +59,13 @@ ADR 0015 chose Procrastinate and its PostgreSQL queue. ADR 0016 placed the queue
 - **Negative:** the enqueue side (web app) must install the same filter, or its `Deferred` log line leaks the ids. This is a Step 1b-ii requirement.
 - **Negative:** on Windows the worker has no graceful stop. That is accepted because of at-least-once delivery, and the RUNBOOK states the stop procedure.
 
+## Step 1b-ii amendment (2026-10-23): enqueue, the poison-job rule, and the web app's log filter
+
+- **Enqueue on the tenant transaction (D2a).** `enqueue_job` takes the session from `begin_tenant_transaction` and passes its driver connection to Procrastinate (`configure_task(connection=...)`). The job row commits or rolls back with the write that caused it. A test shows a rollback leaves no row, and a planted failure (enqueue on a separate connection) makes that test fail.
+- **Task allowlist and typed arguments (D3a).** `ALLOWED_TASKS` is checked before anything is written, and every argument must be a `uuid.UUID`. The refusal names the rule and the type, never the value. The allowlist is empty in this step: the first production task is added in the step that builds it (ingestion, Step 6). Tests use a test-only task name, set with `monkeypatch`.
+- **Poison-job rule (D6a).** `load_document_for_worker` reads the document under `begin_worker_transaction`. A document outside the job's tenant raises `DocumentNotFoundForTenant` and logs `ingest.refused reason=document_not_in_tenant`, with no ids. The job ends `failed` after one run, with no retry. A job for its own tenant succeeds.
+- **Where the filter sits.** The redacting handler is attached to two loggers: `procrastinate` (Procrastinate's records) and `grounded_answers.jobs` (our job records). It is not attached to the root logger, so logging for the rest of the application is unchanged. The web app's factory and the worker both call `install_job_log_redaction()`, which is idempotent.
+
 ## Related decisions
 
 - ADR 0004 (migration URL, `.env` handling)
