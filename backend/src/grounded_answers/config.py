@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # Minimum duration of every login response, in milliseconds (ADR 0014, R11). Bounded so a typo
     # cannot make logins instant (timing leak) or unusably slow.
     auth_login_floor_ms: int = Field(default=500, ge=100, le=5000)
+    # Document upload (ADR 0019). Off until the worker runs the ingestion task (Step 6): the
+    # endpoint then answers 404, so the switch cannot queue jobs nobody runs.
+    upload_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",

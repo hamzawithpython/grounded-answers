@@ -28,8 +28,10 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 | 1b-ii | Enqueue on the tenant transaction (outbox), UUID-only arguments, task allowlist (empty until ingestion), web app log redaction, rollback guarantee, poison-job rule with a test-only task (ADR 0017 amendment) | 🟡 Built on `feat/enqueue-poison-1b-ii`. Not committed, awaiting review. Unit 145, DB 198 passed. Planted separate-connection enqueue made the rollback test fail, then removed. |
 | 2a | File storage decided (ADR 0018: bytes in PostgreSQL, B2 as the scale-up path). Migration 0007: `document_blobs`, grants, policies, checks, model, tests | 🟡 Built on `feat/document-storage-2`. Not committed. Full gates pending. |
 | 2b | `ObjectStore`, `PostgresObjectStore` (caller's tenant transaction), in-memory fake, contract test, rowcount allowed set (ADR 0018, amendment 2) | 🟡 Built on `feat/object-store-2b`. Not committed. Unit and contract tests pass; full gates pending. |
-| 3 | Upload endpoint (tenant_admin, 10 MiB, magic bytes, sha256 dedupe, one transaction) | Not started |
+| 3 | Upload endpoint `POST /documents` (ADR 0019): tenant_admin, streaming 10 MiB cap, type from bytes, sanitised filename, duplicates (live only), one transaction with the outbox job, rate limits. Off until Step 6 (`UPLOAD_ENABLED=false`). | 🟡 Built on `feat/upload-endpoint-3`. Not committed. Full gates pending. |
 | 4 to 8 | Extraction decision, chunks and embeddings, ingestion worker, replace/delete/purge, end-to-end with `demo-data/` | Not started |
+
+**For Step 4 (PDF extraction): the worker needs size and time limits on PDF parsing.** A PDF can carry streams that expand far beyond their size on disk (decompression bombs). Step 4 must cap the decompressed size, the page count and the parse time, and run the parser under those limits, before any text is kept (SPEC §6.1, ADR 0019 D3). The upload only checks the magic bytes.
 
 **Decided in 1a (ADR 0016):** `app_user` gets `SELECT (id)` on `procrastinate_jobs`, `INSERT (job_id, type, at)` on `procrastinate_events` and `USAGE` on the events sequence, so enqueue works. R17 accepted: `app_user` reads job ids across tenants (ids only). `psycopg-pool` (LGPL-3.0-only, unmodified) accepted.
 

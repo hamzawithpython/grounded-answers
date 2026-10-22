@@ -19,9 +19,11 @@ from collections.abc import Mapping
 import procrastinate
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# The task names the web app may enqueue. A new background task is added here in the step that
-# builds it. Step 1b-ii adds none: the poison-job test uses a test-only name, allowed by monkeypatch.
-ALLOWED_TASKS: frozenset[str] = frozenset()
+from grounded_answers.jobs.tasks import INGEST_DOCUMENT
+
+# The task names the web app may enqueue. Ingestion is listed now, so the upload endpoint can
+# queue it; the upload is off until the worker runs the task (UPLOAD_ENABLED, ADR 0019 D6).
+ALLOWED_TASKS: frozenset[str] = frozenset({INGEST_DOCUMENT})
 
 
 class TaskNotAllowed(ValueError):

@@ -7,6 +7,7 @@ from pytest import MonkeyPatch
 
 from grounded_answers.jobs import enqueue
 from grounded_answers.jobs.enqueue import InvalidJobArgument, TaskNotAllowed, validate_job
+from grounded_answers.jobs.tasks import INGEST_DOCUMENT
 
 KNOWN_TASK = "grounded.known_task"
 
@@ -16,9 +17,9 @@ def known_task(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(enqueue, "ALLOWED_TASKS", frozenset({KNOWN_TASK}))
 
 
-def test_no_task_is_allowed_by_default() -> None:
-    """Step 1b-ii adds no production task, so the web app can enqueue nothing yet."""
-    assert enqueue.ALLOWED_TASKS == frozenset()
+def test_only_the_ingestion_task_is_allowed_by_default() -> None:
+    """Ingestion is the one production task the web app may queue (ADR 0019, decision D6)."""
+    assert enqueue.ALLOWED_TASKS == frozenset({INGEST_DOCUMENT})
     with pytest.raises(TaskNotAllowed):
         validate_job(KNOWN_TASK, {"document_id": uuid.uuid4()})
 
