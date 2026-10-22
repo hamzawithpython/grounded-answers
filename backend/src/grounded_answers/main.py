@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
 from grounded_answers.config import get_settings
-from grounded_answers.database import create_database_engine
+from grounded_answers.database import create_database_engine, create_session_factory
 from grounded_answers.readiness import (
     ReadinessChecker,
     make_cache_check,
@@ -38,6 +38,7 @@ def _make_lifespan(
 
         settings = get_settings()
         engine = create_database_engine(str(settings.database_url))
+        app.state.session_factory = create_session_factory(engine)
         cache = Redis.from_url(str(settings.redis_url))
         app.state.readiness = ReadinessChecker(
             {

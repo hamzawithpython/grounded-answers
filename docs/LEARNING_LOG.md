@@ -475,3 +475,98 @@ A: Length alone accepts `passwordpassword`. The 10,000-entry list catches the pa
 
 **Q: What is the risk of an operator action with no actor?**
 A: We cannot say which person did it. With one operator that is acceptable, and it is recorded as residual risk R10. Before a second operator joins, the audit row needs an identity.
+
+---
+
+# Session 3, Step 2: ORM models and the tenant transaction (2026-10-22)
+
+## Concepts in plain words
+
+### ORM model
+A Python class that stands for a table. Columns are attributes, and rows are objects. The models here
+mirror the migrations; the migrations stay the source of truth for policies, grants and functions.
+
+### `lazy="raise"`
+A relationship such as `membership.user` normally loads its related row the first time it is read. In
+async code that load cannot run safely, so it fails late or silently. `lazy="raise"` makes the read raise
+at once, before any query. We set it on every relationship.
+
+### `deferred`
+A column that is left out of a plain `SELECT` until someone asks for it. `app_user` cannot read
+`password_hash`, so the model marks it deferred: `select(User)` does not name it, and the database never
+sees a forbidden column.
+
+### `set_config(..., true)`
+Sets a database setting for one transaction only. The value disappears at COMMIT or ROLLBACK. A pooled
+connection is reused by the next request, so a session-level setting would leak; a transaction-level one
+cannot.
+
+### `scope="function"`
+FastAPI runs the code after a `yield` dependency either before or after the response is sent, depending on
+the scope. The commit lives in that code, so the scope decides whether a failed commit can still change the
+response.
+
+### `eager_defaults`
+When a row is inserted, the database fills in `created_at`. By default SQLAlchemy does not read that value
+back, so the attribute stays "expired". Reading it then needs a query, which async code cannot run.
+`eager_defaults=True` returns the value with the insert.
+
+### Drift check
+A test that compares the ORM models with the migrated database. If someone changes a column in one place and
+not the other, the test fails. Alembic's comparison covers tables, columns, keys and indexes. CHECK constraints
+need a separate list.
+
+## Problems Encountered & Solutions
+
+### 9. A log line never appeared in the test
+- **What happened:** the rowcount test raised correctly, but `caplog` was empty.
+- **Why:** the test database fixture runs Alembic. Alembic's `env.py` calls `fileConfig()`, and its default
+  turns off every logger that already exists. The rowcount logger existed, so it went silent.
+- **Fix:** `fileConfig(..., disable_existing_loggers=False)`. The same fix protects the app when migrations run
+  in the same process.
+
+### 10. A failing commit gave a 200 in a quick check
+- **What happened:** a deferred foreign key failed at COMMIT, but the route still returned success in the
+  default setup.
+- **Why:** with the default `scope="request"` FastAPI runs the code after `yield` after the response is sent.
+- **Fix:** `scope="function"` on the dependency. A test now checks that a failed commit becomes a 500 and
+  stores nothing. A separate check confirmed the default-scope result, so the claim is measured, not assumed.
+
+### 11. Inserted rows had no primary key
+- **What happened:** an ORM insert failed with a NOT NULL violation on `id`.
+- **Why:** the schema has no default for `id`, because ids are generated in the app (ADR 0005). The models had
+  no Python-side default either.
+- **Fix:** `default=uuid.uuid4` on each primary key. This adds nothing to the schema, and the drift test still
+  passes.
+
+### 12. A rollback test that could not detect the bug it was meant for
+- **What happened:** with `set_config(..., false)` (session scope) planted on purpose, the rollback and error
+  tests still passed. Only the commit test failed.
+- **Why:** PostgreSQL reverts a session setting made inside a transaction that rolls back. Those tests check
+  a different failure: a context that survives a rollback.
+- **Fix:** none needed in the code. The commit test is the one that catches session scope. The limit is
+  recorded in ADR 0011.
+
+## Interview Q&A
+
+**Q: Why does a pooled connection need special care with tenant context?**
+A: The pool gives the same physical connection to the next request. A session-level setting would stay on that
+connection. A transaction-level setting (`set_config(..., true)`) ends with the transaction, so the next request
+starts clean. We prove it by checking the backend process id on one connection.
+
+**Q: What does `lazy="raise"` protect you from?**
+A: From a silent extra query in async code, or from a partial result that looks complete. The error appears at
+the line that reads the relationship, which is where the fix belongs.
+
+**Q: Why not generate the models from the database?**
+A: Alembic's autogenerate misses policies, grants and functions, and we write those as explicit SQL. Generating
+the models would also hide drift instead of catching it. The drift test compares two sources that are written
+separately.
+
+**Q: A commit fails after your route returned. What does the client see?**
+A: With FastAPI's default scope, a 200, because the commit runs after the response. With `scope="function"`, a
+500. We use the second, and a test checks it.
+
+**Q: How did you know your leak test would catch the bug?**
+A: I planted the bug on purpose (session scope) and checked that the test failed. Two of the four tests did not
+catch it, and I wrote down why.

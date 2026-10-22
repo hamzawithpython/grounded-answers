@@ -7,7 +7,12 @@ URL (MIGRATION_DATABASE_URL), so the app never runs as the migration role or the
 
 import asyncio
 
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from grounded_answers.runtime import ensure_psycopg_compatible_loop
 
@@ -27,3 +32,13 @@ def create_database_engine(database_url: str) -> AsyncEngine:
         # Detect dropped connections before a request uses them (ADR 0005).
         pool_pre_ping=True,
     )
+
+
+def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """
+    Build the session factory (ADR 0005).
+
+    expire_on_commit=False: after COMMIT the loaded attributes stay readable. Without it, the next
+    attribute access would trigger a lazy load, which async code cannot do.
+    """
+    return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)

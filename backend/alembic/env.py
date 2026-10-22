@@ -25,7 +25,9 @@ from grounded_answers.runtime import selector_loop_factory
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: the default would silence every app logger that already
+    # exists when migrations run in the same process (for example, the test session).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = None
 

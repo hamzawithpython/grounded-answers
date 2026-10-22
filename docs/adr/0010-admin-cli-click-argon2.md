@@ -121,9 +121,9 @@ migration 0005 is not needed.
 
 ### Database access in Step 1
 
-The CLI runs explicit SQL through SQLAlchemy `text()` with bind parameters. The ORM models arrive
-in Session 3, Step 2 (ADR 0005). The SQL matches what the migrations define, and Step 2 can
-replace it without changing behaviour.
+The CLI runs explicit SQL through SQLAlchemy `text()` with bind parameters. The ORM models arrived
+in Session 3, Step 2 (ADR 0005, ADR 0011). The CLI stays on explicit SQL by decision: it runs as
+`migration_role` and does not use the tenant helper, so converting it would add risk without a benefit.
 
 ## Consequences
 
