@@ -5,6 +5,15 @@ Dependency and tooling changes are listed here too.
 
 ## [Unreleased]
 
+### Documentation
+- `docs/SECURITY.md`: threat model (assets, actors, trust boundaries, 24 threats with status and proving test),
+  tenant-isolation layers, secrets table, backups after purge (ADR 0007), residual risks R1–R9.
+- `docs/RUNBOOK.md`: health and readiness (ADR 0009); Session 2 bootstrap problems; rollback rule and
+  per-revision table; branch protection with its verify command; restore procedure (planned with the purge job).
+- `docs/LEARNING_LOG.md`: Session 2 concepts (RLS, FORCE, `set_config` vs `SET`, SECURITY DEFINER, SCRAM,
+  composite FKs, silent REVOKE, liveness vs readiness) with interview Q&A.
+- Repository made public. Branch protection on `main` applied and verified through the API (T24).
+
 ### Fixed
 - `backend/.env.example` no longer contains `MIGRATION_DATABASE_URL`. The web app loads that file, and
   `Settings` forbids unknown keys, so the app failed at startup. Migration credentials now come from the
