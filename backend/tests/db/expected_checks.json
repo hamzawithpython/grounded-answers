@@ -1,0 +1,122 @@
+[
+  {
+    "table": "audit_log",
+    "name": "audit_log_action_check",
+    "definition": "CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)))"
+  },
+  {
+    "table": "documents",
+    "name": "documents_deleted_purge_chk",
+    "definition": "CHECK (((deleted_at IS NULL) = (purge_after IS NULL)))"
+  },
+  {
+    "table": "documents",
+    "name": "documents_title_check",
+    "definition": "CHECK (((char_length(title) >= 1) AND (char_length(title) <= 200)))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_check",
+    "definition": "CHECK ((storage_key ~~ (('tenant/'::text || (tenant_id)::text) || '/%'::text)))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_content_type_check",
+    "definition": "CHECK ((content_type = ANY (ARRAY['application/pdf'::text, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'::text, 'text/plain'::text, 'text/markdown'::text])))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_failure_reason_check",
+    "definition": "CHECK ((char_length(failure_reason) <= 500))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_original_filename_check",
+    "definition": "CHECK (((char_length(original_filename) >= 1) AND (char_length(original_filename) <= 255)))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_retired_purge_chk",
+    "definition": "CHECK (((retired_at IS NULL) = (purge_after IS NULL)))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_sha256_check",
+    "definition": "CHECK ((octet_length(sha256) = 32))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_size_bytes_check",
+    "definition": "CHECK (((size_bytes >= 1) AND (size_bytes <= 10485760)))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_status_check",
+    "definition": "CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'ready'::text, 'failed'::text, 'retired'::text, 'purging'::text])))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_status_retired_chk",
+    "definition": "CHECK (((status = ANY (ARRAY['retired'::text, 'purging'::text])) = (retired_at IS NOT NULL)))"
+  },
+  {
+    "table": "document_versions",
+    "name": "document_versions_version_no_check",
+    "definition": "CHECK ((version_no >= 1))"
+  },
+  {
+    "table": "password_reset_tokens",
+    "name": "password_reset_tokens_expiry_chk",
+    "definition": "CHECK ((expires_at > created_at))"
+  },
+  {
+    "table": "password_reset_tokens",
+    "name": "password_reset_tokens_token_hash_check",
+    "definition": "CHECK ((octet_length(token_hash) = 32))"
+  },
+  {
+    "table": "refresh_tokens",
+    "name": "refresh_tokens_expiry_chk",
+    "definition": "CHECK ((expires_at > issued_at))"
+  },
+  {
+    "table": "refresh_tokens",
+    "name": "refresh_tokens_token_hash_check",
+    "definition": "CHECK ((octet_length(token_hash) = 32))"
+  },
+  {
+    "table": "tenant_email_domains",
+    "name": "tenant_email_domains_domain_check",
+    "definition": "CHECK (((domain = lower(domain)) AND (domain ~ '^[a-z0-9-]+(\\.[a-z0-9-]+)+$'::text) AND ((char_length(domain) >= 4) AND (char_length(domain) <= 253))))"
+  },
+  {
+    "table": "tenant_memberships",
+    "name": "tenant_memberships_role_check",
+    "definition": "CHECK ((role = ANY (ARRAY['tenant_admin'::text, 'employee'::text])))"
+  },
+  {
+    "table": "tenants",
+    "name": "tenants_name_check",
+    "definition": "CHECK (((char_length(name) >= 1) AND (char_length(name) <= 200)))"
+  },
+  {
+    "table": "tenants",
+    "name": "tenants_slug_check",
+    "definition": "CHECK ((slug ~ '^[a-z0-9-]{3,40}$'::text))"
+  },
+  {
+    "table": "tenants",
+    "name": "tenants_status_check",
+    "definition": "CHECK ((status = ANY (ARRAY['active'::text, 'suspended'::text])))"
+  },
+  {
+    "table": "users",
+    "name": "users_display_name_check",
+    "definition": "CHECK (((char_length(display_name) >= 1) AND (char_length(display_name) <= 120)))"
+  },
+  {
+    "table": "users",
+    "name": "users_email_check",
+    "definition": "CHECK (((email = lower(email)) AND ((char_length(email) >= 3) AND (char_length(email) <= 254))))"
+  }
+]
