@@ -31,6 +31,10 @@ SET_TENANT_CONTEXT_SQL = text(
     "set_config('app.current_user', :user_id, true)"
 )
 
+# The worker has no user, only a tenant (ADR 0017). The user setting stays unset. The only code
+# that reads app.current_user is create_tenant_user, and worker_user has no EXECUTE on it.
+SET_WORKER_CONTEXT_SQL = text("SELECT set_config('app.current_tenant', :tenant_id, true)")
+
 
 @dataclass(frozen=True)
 class TenantContext:
@@ -55,6 +59,28 @@ async def begin_tenant_transaction(
             SET_TENANT_CONTEXT_SQL,
             {"tenant_id": str(context.tenant_id), "user_id": str(context.user_id)},
         )
+        yield session
+
+
+@dataclass(frozen=True)
+class WorkerContext:
+    """The tenant a background job works for. A job has no user (ADR 0017)."""
+
+    tenant_id: uuid.UUID
+
+
+@asynccontextmanager
+async def begin_worker_transaction(
+    session_factory: async_sessionmaker[AsyncSession], context: WorkerContext
+) -> AsyncIterator[AsyncSession]:
+    """
+    Yield a session inside one transaction that carries only the job's tenant (ADR 0017).
+
+    The same rules as begin_tenant_transaction: a new session, a bound transaction-local value
+    as the first statement, commit on success, rollback and re-raise on any exception.
+    """
+    async with session_factory() as session, session.begin():
+        await session.execute(SET_WORKER_CONTEXT_SQL, {"tenant_id": str(context.tenant_id)})
         yield session
 
 

@@ -24,7 +24,7 @@ SETTINGS_NAMES = ("DATABASE_URL", "REDIS_URL", "LOG_LEVEL", "CORS_ORIGINS")
 
 @pytest.fixture
 def clean_environment(monkeypatch: MonkeyPatch) -> None:
-    for name in (*SETTINGS_NAMES, "MIGRATION_DATABASE_URL"):
+    for name in (*SETTINGS_NAMES, "MIGRATION_DATABASE_URL", "WORKER_DATABASE_URL"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -50,4 +50,23 @@ def test_settings_rejects_unknown_key_in_env_file(tmp_path: Path, clean_environm
         encoding="utf-8",
     )
     with pytest.raises(ValidationError, match="migration_database_url"):
+        Settings(_env_file=env_file)
+
+
+def test_env_example_has_no_worker_credentials() -> None:
+    """The worker's login never sits in a file (ADR 0017, decision D1)."""
+    assert "WORKER_DATABASE_URL" not in EXAMPLE.read_text(encoding="utf-8")
+
+
+def test_web_settings_rejects_a_worker_url_in_the_env_file(
+    tmp_path: Path, clean_environment: None
+) -> None:
+    """The web app must refuse worker credentials, the same way it refuses migration ones."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        EXAMPLE.read_text(encoding="utf-8")
+        + "WORKER_DATABASE_URL=postgresql+psycopg://worker_user:x@127.0.0.1:5432/db\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError, match="worker_database_url"):
         Settings(_env_file=env_file)

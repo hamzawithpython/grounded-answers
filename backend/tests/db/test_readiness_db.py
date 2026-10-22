@@ -48,12 +48,17 @@ async def test_all_real_checks_pass_when_healthy(grounded_db: DbHandle) -> None:
     cache = Redis.from_url(TEST_REDIS_URL)
     try:
         async with _app_engine(grounded_db) as engine:
+            # Generous limits for this healthy-path test only, so a loaded machine or CI runner
+            # cannot fail it. Production keeps the 1 s check timeout and 2 s budget, and the
+            # timeout tests below keep them strict.
             checker = ReadinessChecker(
                 {
                     DATABASE: make_database_check(engine),
                     CACHE: make_cache_check(cache),
                     SCHEMA: make_schema_check(engine),
-                }
+                },
+                check_timeout=10.0,
+                budget=15.0,
             )
             assert await checker.failed_dependencies() == ()
     finally:

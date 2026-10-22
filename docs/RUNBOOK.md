@@ -502,6 +502,31 @@ The unit test `test_rotation_old_key_still_verifies_until_removed` covers this o
 
 The refresh cookie is `__Secure-refresh`. Browsers keep it only when it carries `Secure`. Local development uses `http://127.0.0.1`. The browser test result and any change to the dev HTTPS setup are recorded in ADR 0012.
 
+## Background worker (ADR 0017, Session 4 Step 1b-i)
+
+The worker runs background jobs as `worker_user`. Its database URL is set in the shell only, never in a file.
+
+**Start (from `backend\`, in PowerShell):**
+
+```powershell
+# Set the worker login for this shell only. Use the worker password you chose at bootstrap step 3.
+$env:WORKER_DATABASE_URL = "postgresql://worker_user:<password>@127.0.0.1:5432/grounded_answers"
+uv run python -m grounded_answers.jobs.worker
+```
+
+Expected: the process stays in the foreground. A job's outcome is logged as `Job ... ended with status: Success` or `ended with status: Error`. Job arguments are never logged.
+
+**Stop (Windows has no graceful stop for the worker, upstream limit, ADR 0015):**
+
+1. Find the worker's process ID: `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -match 'grounded_answers.jobs.worker' } | Select-Object ProcessId, CommandLine`.
+2. Stop that process only, by its ID: `Stop-Process -Id <ProcessId>`.
+
+Never stop every `python.exe` process. A job that was running is halted, and it runs again later: delivery is at least once, and every job is idempotent.
+
+**Check the worker's login without starting it:** `WORKER_DATABASE_URL` must be set in the shell. A `.env` file never provides it, and the web app refuses it if it finds one there (`tests/test_env_example.py`).
+
+**Migration 0006 (Session 4, Step 1b-i):** a worker cannot start without it, because the worker's startup calls the stalled-worker prune. Run `uv run alembic upgrade head` once after pulling this change.
+
 ## Rollback
 
 Two things roll back separately: the application and the database schema.

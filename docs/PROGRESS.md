@@ -24,7 +24,8 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 | Step | Work | State |
 |---|---|---|
 | 1a | Migration `0005` (Procrastinate 3.10.0 in schema `queue`), grants, catalog guard, connector and enqueue tests (ADR 0016) | 🟡 PR open on `feat/job-queue-foundation`, awaiting review. 119 unit and 182 DB tests pass. |
-| 1b | Worker entry point (`worker_user`), `WorkerSettings`, enqueue helper with id-only arguments, `begin_worker_transaction`, poison-job test | Not started |
+| 1b-i | `WorkerSettings` (env only), worker entry point as `worker_user`, `begin_worker_transaction`, redacting log filter, migration `0006` (prune grant) (ADR 0017) | 🟡 Built on `feat/worker-enqueue-1b`. Not committed, awaiting review. |
+| 1b-ii | Enqueue helper with id-only arguments and task allowlist, rollback test, poison-job rule with a dummy task (ADR 0017) | Not started (after 1b-i is merged) |
 | 2 | File storage decision, then implementation behind `storage_key` | Not started |
 | 3 | Upload endpoint (tenant_admin, 10 MiB, magic bytes, sha256 dedupe, one transaction) | Not started |
 | 4 to 8 | Extraction decision, chunks and embeddings, ingestion worker, replace/delete/purge, end-to-end with `demo-data/` | Not started |
