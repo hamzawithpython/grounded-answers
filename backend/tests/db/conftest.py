@@ -21,12 +21,14 @@ import subprocess
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
+from alembic.config import Config
 from psycopg import sql
 
+from alembic import command
 from grounded_answers.scram import build_verifier
 
 from .database import LOGIN_ROLES, DbHandle
@@ -110,6 +112,28 @@ def grounded_db() -> Iterator[DbHandle]:
 
     _run_sql_file(psql, SCRIPTS_DIR / "bootstrap_cluster.sql", "postgres", env, redact)
     _run_sql_file(psql, SCRIPTS_DIR / "bootstrap_database.sql", TEST_DB_NAME, env, redact)
+
+    # Schema: the migrations run as migration_role, the same role production uses (ADR 0005).
+    admin_parts = urlsplit(admin_url)
+    migration_url = urlunsplit(
+        (
+            "postgresql+psycopg",
+            f"migration_role:{passwords['migration_role']}@"
+            f"{admin_parts.hostname}:{admin_parts.port}",
+            f"/{TEST_DB_NAME}",
+            "",
+            "",
+        )
+    )
+    previous = os.environ.get("MIGRATION_DATABASE_URL")
+    os.environ["MIGRATION_DATABASE_URL"] = migration_url
+    try:
+        command.upgrade(Config(str(BACKEND_DIR / "alembic.ini")), "head")
+    finally:
+        if previous is None:
+            os.environ.pop("MIGRATION_DATABASE_URL", None)
+        else:
+            os.environ["MIGRATION_DATABASE_URL"] = previous
 
     yield DbHandle(
         admin_url=admin_url,

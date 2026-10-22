@@ -95,14 +95,24 @@ def test_grounded_schema_is_owned_by_migration_role(catalog: psycopg.Connection)
     assert owner == ("migration_role",)
 
 
+# alembic_version is created by Alembic itself, owned by migration_role, and has no grants to
+# any app role (test_grants_on_grounded_match_expected_list enforces that). FORCE RLS on it
+# would stop Alembic from writing its own version row, so it is the one exemption.
+RLS_EXEMPT_TABLES = frozenset({"alembic_version"})
+
+
 def test_every_table_in_grounded_has_rls_enabled_and_forced(catalog: psycopg.Connection) -> None:
-    """Vacuously true until the first table exists. Then it is strict."""
+    """Every table except RLS_EXEMPT_TABLES has RLS enabled and forced."""
     rows = catalog.execute(
         "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
         "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname = 'grounded' AND c.relkind IN ('r', 'p')"
     ).fetchall()
-    not_enforced = [name for name, enabled, forced in rows if not (enabled and forced)]
+    not_enforced = [
+        name
+        for name, enabled, forced in rows
+        if name not in RLS_EXEMPT_TABLES and not (enabled and forced)
+    ]
     assert not_enforced == [], f"tables without RLS enabled and forced: {not_enforced}"
 
 
@@ -127,32 +137,65 @@ def test_security_definer_functions_pin_search_path_and_are_not_public(
 
 
 def _actual_grants(conn: psycopg.Connection) -> list[str]:
-    """Every grant on grounded objects to a role other than the owner, as stable strings."""
+    """
+    Every grant on grounded objects to a role other than the owner, as stable strings.
+
+    Reads the ACLs directly (pg_class, pg_attribute, pg_proc, pg_namespace). The
+    information_schema column view also lists columns implied by table grants, so it
+    would make the expected list unreadable. coalesce(..., acldefault(...)) makes the
+    defaults visible too: a default that grants EXECUTE to PUBLIC shows up as a grant.
+    """
     found: list[str] = []
-    for grantee, table, privilege in conn.execute(
-        "SELECT grantee, table_name, privilege_type FROM information_schema.role_table_grants "
-        "WHERE table_schema = 'grounded' AND grantee <> 'migration_role'"
+
+    for grantee, name, privilege in conn.execute(
+        """
+        SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+               c.relname, a.privilege_type
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace,
+             aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+        WHERE n.nspname = 'grounded' AND c.relkind IN ('r', 'p')
+          AND a.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'migration_role')
+        """
     ).fetchall():
-        found.append(f"{grantee}|table:{table}|{privilege}")
+        found.append(f"{grantee}|table:{name}|{privilege}")
+
     for grantee, table, column, privilege in conn.execute(
-        "SELECT grantee, table_name, column_name, privilege_type "
-        "FROM information_schema.column_privileges "
-        "WHERE table_schema = 'grounded' AND grantee <> 'migration_role'"
+        """
+        SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+               c.relname, att.attname, a.privilege_type
+        FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid
+             JOIN pg_namespace n ON n.oid = c.relnamespace,
+             aclexplode(att.attacl) a
+        WHERE n.nspname = 'grounded' AND att.attnum > 0 AND NOT att.attisdropped
+          AND a.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'migration_role')
+        """
     ).fetchall():
         found.append(f"{grantee}|column:{table}.{column}|{privilege}")
-    for grantee, routine, privilege in conn.execute(
-        "SELECT grantee, routine_name, privilege_type FROM information_schema.routine_privileges "
-        "WHERE routine_schema = 'grounded' AND grantee <> 'migration_role'"
+
+    for grantee, name, privilege in conn.execute(
+        """
+        SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+               p.proname, a.privilege_type
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace,
+             aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+        WHERE n.nspname = 'grounded'
+          AND a.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'migration_role')
+        """
     ).fetchall():
-        found.append(f"{grantee}|routine:{routine}|{privilege}")
+        found.append(f"{grantee}|routine:{name}|{privilege}")
+
     for grantee, privilege in conn.execute(
-        "SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END, "
-        "       a.privilege_type "
-        "FROM pg_namespace n, aclexplode(n.nspacl) a "
-        "WHERE n.nspname = 'grounded' AND a.grantee <> (SELECT oid FROM pg_roles "
-        "                                              WHERE rolname = 'migration_role')"
+        """
+        SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+               a.privilege_type
+        FROM pg_namespace n,
+             aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a
+        WHERE n.nspname = 'grounded'
+          AND a.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'migration_role')
+        """
     ).fetchall():
         found.append(f"{grantee}|schema:grounded|{privilege}")
+
     return sorted(found)
 
 

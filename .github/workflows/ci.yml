@@ -26,9 +26,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run ruff check src/ tests/ scripts/
-      - run: uv run ruff format --check src/ tests/ scripts/
-      - run: uv run mypy src/ tests/ scripts/
+      - run: uv run ruff check src/ tests/ scripts/ alembic/
+      - run: uv run ruff format --check src/ tests/ scripts/ alembic/
+      - run: uv run mypy src/ tests/ scripts/ alembic/
       - run: uv run --with pip-audit pip-audit
       - run: uv run pytest -m "not db"
 

@@ -153,6 +153,12 @@ npm audit --audit-level=high
 npm run build
 ```
 
+## Dependency Upgrades (ADR 0005)
+
+- **Wait 7 days after a release before a manual upgrade.** Dependabot applies the same cooldown to automatic PRs. Security advisories are not delayed.
+- Do not add a date-based hold (`exclude-newer`) to `pyproject.toml`. A forgotten hold would also block security fixes.
+- The lock file keeps existing pins. Only `uv lock --upgrade` or `--upgrade-package` moves them.
+
 ## Running Database Tests (ADR 0006)
 
 DB tests need the local PostgreSQL container (`docker compose up -d postgres`). They fail, never skip, when it is unavailable.
