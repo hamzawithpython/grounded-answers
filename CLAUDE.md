@@ -25,6 +25,7 @@ Read `docs/SPEC.md` and `docs/PROGRESS.md` at the start of every session.
 ## Quality gates (never skip, never weaken)
 - No feature without tests. Run tests, lint, and type checks before saying a step is done.
 - Before every push, run exactly the commands CI runs: `uv run ruff check src/ tests/ scripts/ alembic/`, `uv run ruff format --check src/ tests/ scripts/ alembic/`, `uv run mypy src/ tests/ scripts/ alembic/`, `uv run pytest -m "not db"`, `uv run pytest -m db`. A local gitleaks scan of the branch range runs too.
+- Pre-commit secret scans must never read git-ignored files. Scan the staged changes with `gitleaks git --staged --redact` (gitleaks v8.24.3), or a scratch copy of the changed files with `gitleaks dir --redact`. Always use `--redact`. Run the commit-range scan (`gitleaks git --log-opts "main..HEAD" --redact`) before every push.
 - Never hardcode secrets, keys, or passwords. Use `.env` (git-ignored) and keep `.env.example` updated.
 - Validate all inputs. Handle errors explicitly. No bare `except`. No silent failures.
 - Never log secrets or personal data.
