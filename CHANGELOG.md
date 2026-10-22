@@ -22,6 +22,12 @@ Dependency and tooling changes are listed here too.
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 
 ### Added
+- Session 4, Step 1a: job queue schema (migration `0005`, Procrastinate 3.10.0, MIT, pinned in `pyproject.toml`).
+  The queue lives in schema `queue`, created by the bootstrap and owned by `migration_role` (ADR 0016). Grants
+  are the exact list the code paths need, reviewed in `tests/db/expected_queue_grants.json`. PUBLIC has no
+  privilege on any queue object. Tests: connector finds the queue with `queue` on the path and not without it;
+  `app_user` enqueues one job with one event and cannot read its arguments. Enqueue grants for `app_user`:
+  `SELECT (id)` on jobs, `INSERT` on events, and the events sequence (ADR 0016, R17 accepted).
 - Session 3, Step 4: background job runner decided (ADR 0015): Procrastinate 3.10.0 on PostgreSQL. A throwaway
   spike proved that a document row and its job commit or roll back together. Job arguments are ids only; delivery is
   at least once, so every job is idempotent; the worker treats the job's tenant id as untrusted.

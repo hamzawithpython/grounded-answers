@@ -288,6 +288,8 @@ Get-Content -Raw backend\scripts\bootstrap_database.sql | docker compose exec -T
 if ($LASTEXITCODE -ne 0) { throw "database bootstrap failed" }
 ```
 
+**Session 4, Step 1a (ADR 0016):** this bootstrap also creates the `queue` schema and gives `app_user` and `worker_user` the search path `grounded, queue`. On a database that was bootstrapped before this step, run step 5 again **before** `alembic upgrade head` (migration `0005`). Migration `0005` fails with "schema queue is missing" otherwise. The bootstrap is idempotent.
+
 **6. Verify the three logins** (see "Verify login" below). Expect three `LOGIN OK` lines.
 
 ```powershell
