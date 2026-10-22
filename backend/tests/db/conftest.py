@@ -30,6 +30,7 @@ from psycopg import sql
 from alembic import command
 from grounded_answers.scram import build_verifier
 
+from .auth_support import accounts, client  # noqa: F401 - fixtures for the auth HTTP tests
 from .database import LOGIN_ROLES, DbHandle
 from .guard import TEST_DB_NAME, check_targets
 from .psql import run_sql_file

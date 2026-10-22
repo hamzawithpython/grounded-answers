@@ -114,7 +114,7 @@ async def _lookup(
     )
 
 
-async def _audit(
+async def add_audit(
     session: AsyncSession,
     *,
     tenant_id: uuid.UUID,
@@ -182,7 +182,7 @@ async def login(
         if row.tenant_id is not None:
             context = TenantContext(tenant_id=row.tenant_id, user_id=row.user_id)
             async with begin_tenant_transaction(session_factory, context) as session:
-                await _audit(
+                await add_audit(
                     session,
                     tenant_id=row.tenant_id,
                     actor_id=row.user_id,
@@ -212,7 +212,7 @@ async def login(
                 expires_at=now + REFRESH_TOKEN_LIFETIME,
             )
         )
-        await _audit(
+        await add_audit(
             session,
             tenant_id=tenant_id,
             actor_id=row.user_id,
