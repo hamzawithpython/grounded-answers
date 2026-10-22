@@ -1,187 +1,102 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 2, Step 1 done)
+**Last updated:** 2026-10-22 (Session 2, in progress: Steps 1–6 done, Steps 7–8 pending)
 
-## Completed
+## Session 2 status at a glance
 
-### Project Setup
+| Step | Work | State | Where |
+|---|---|---|---|
+| 1 | ESLint 9 → 10 | ✅ Merged | PR #8 |
+| 2a | Auth decision (self-built JWT) | ✅ ADR 0004 Accepted, amended twice | PR #9 |
+| 2b | DB access (async SQLAlchemy 2.1 + psycopg 3) | ✅ ADR 0005 Accepted | PR #10 |
+| 2c | DB test strategy (service container, real logins) | ✅ ADR 0006 Accepted | PR #12 |
+| 3 | Schema design (8 tables, composite FKs, ON DELETE RESTRICT) | ✅ `docs/ARCHITECTURE.md`, ADR 0007 | PR #12 |
+| 4 | Roles and migrations (0001 tables, 0002 grants) | ✅ | PR #12 |
+| 5 | RLS policies, definer functions, `create_tenant_user` (0003) | ✅ | PR #12, commit `b2192d0` (CI green) |
+| 6 | Proof by tests | 🟡 Mostly done (see below) | working tree |
+| 7 | `/ready` endpoint | ⬜ Not started | — |
+| 8 | Docs: SECURITY.md, RUNBOOK, LEARNING_LOG, CHANGELOG | 🟡 Partly done | — |
+
+## Step 6: what the tests prove (DB suite: 83 passing, 0 skipped)
+
+Run with `pytest -m db` against `grounded_answers_test`. Each run drops and rebuilds that database.
+
+- **Bootstrap:** the cluster and database SQL files run through psql, the same as the operator's commands. Verifiers come from libpq (`PGconn.encrypt_password`). Each login role authenticates with the password whose verifier was set.
+- **Migrations:** the round-trip (upgrade, downgrade, upgrade) runs in its own database, `grounded_answers_test_roundtrip`, which is dropped afterwards. It is order-independent.
+- **Catalog guard:** role attributes, PUBLIC privileges, schema owner, RLS enabled and forced on every table (`alembic_version` is the one documented exemption), `SECURITY DEFINER` search_path pinning and no PUBLIC EXECUTE, and an exact grants list (`expected_grants.json`).
+- **Read isolation as app_user:** no tenant context gives zero rows; a tenant sees exactly its own rows, compared to the admin's ground truth.
+- **Cross-tenant INSERT:** refused on every table, including `audit_log` with a NULL actor. The test records whether the grant or RLS refused it.
+- **`create_tenant_user`:** success; seven refusal causes all give the same SQLSTATE and message; no row is created on refusal. The actor and tenant come from the session settings, never from parameters.
+- **Worker purge transitions:** retired → purging only; delete only purging; a document can be deleted only once deleted and with no versions left; no cross-tenant change; no access to identity or token tables.
+- **`updated_at` trigger** runs for app_user, and app_user cannot write `updated_at` itself.
+
+Unit suite: 38 passing. Both suites run in CI (`backend` with `-m "not db"`, `backend-db` with `-m db`).
+
+## Not done yet in Session 2
+
+- **Step 7, `/ready`.** Checks PostgreSQL and Valkey with short timeouts. Returns 503 and names the failed dependency. Tests for healthy and failed cases.
+- **Step 8, docs.**
+  - `docs/SECURITY.md`: threat model; tenant-isolation controls; the residual risks in ADR 0004 (email squatting inside approved domains, admin enumeration, the defence-in-depth note on the actor check); backups keep deleted content after purge (ADR 0007).
+  - `docs/RUNBOOK.md`: `/ready` and rollback steps; enabling branch protection (steps given in chat, not yet applied to `main`).
+  - `docs/LEARNING_LOG.md`: this session's concepts and interview Q&A (RLS, `set_config` versus `SET`, `SECURITY DEFINER`, SCRAM, composite foreign keys, the silent REVOKE).
+  - `CHANGELOG.md`: Session 2 entries are present; add the migrations and tests.
+
+## Open items and decisions to remember
+
+- **App auth code path is not built yet.** The login, refresh and logout endpoints, and the step that sets `app.current_user` and `app.current_tenant` together, come with the first endpoint that needs them. `create_tenant_user` has no caller in the app yet.
+- **Branch protection on `main`** is not configured. Required checks: `backend`, `backend-db`, `frontend`, `security`. Add `backend-db` only after it has run on `main`.
+- **Retention:** `DOCUMENT_RETENTION_DAYS` is in ADR 0007, but the setting is not in `Settings` yet. Add it with the purge job (Session 3).
+- **Backups:** the backup retention window depends on the hosting provider. Record it in SECURITY.md when a host is chosen.
+- **Managed Postgres:** when a host is chosen, check whether its pooler runs in transaction mode (set `prepare_threshold=None`) and whether it allows `CREATE ROLE` and `ALTER ... OWNER` (ADR 0005, ADR 0004).
+- **Windows event loop:** the dev server must start with `--loop grounded_answers.runtime:selector_loop_factory` (RUNBOOK).
+- **Dependency upgrades:** wait 7 days after a release before a manual upgrade (RUNBOOK). No date-based holds in `pyproject.toml`.
+
+## Session 3 carry-over: check rowcount on every RLS-filtered write
+
+- An UPDATE or DELETE that RLS filters out affects **0 rows and raises no error**. Only a `WITH CHECK` violation raises (`InsufficientPrivilege`, "row-level security").
+- So the purge worker and every app write path must check `rowcount`. An unexpected 0 is a failure: log it and raise an alert. It is never treated as success.
+- Tests required with the first write path that depends on this: the purge worker's transitions, and each app UPDATE or DELETE. The worker transition tests already assert the 0-row behaviour (`tests/db/test_worker_policies.py`). The logging and alerting, and the app-side checks, are not built yet.
+
+## Next session starts here
+
+1. Commit and merge the worker and trigger tests and this file (after approval).
+2. Step 7: `/ready` (PostgreSQL and Valkey, short timeouts, 503 with the failed dependency, healthy and failed tests).
+3. Step 8: SECURITY.md, RUNBOOK, LEARNING_LOG, CHANGELOG.
+4. Then Session 3: retrieval and ingestion, starting with the document upload path and the purge job (with `DOCUMENT_RETENTION_DAYS`).
+
+## Completed before Session 2
+
+### Project setup
 - ✅ Monorepo layout (backend/, frontend/) — ADR 0001
 - ✅ Python dependency manager: uv — ADR 0002
 - ✅ Node package manager: npm — part of ADR 0002
 - ✅ In-memory cache: Valkey 9.1.2 (BSD license, open-source fork) — ADR 0003
 - ✅ docker-compose.yml (PostgreSQL 17 + pgvector 0.8.7, Valkey 9.1.2)
 
-### Backend (FastAPI + Python 3.12)
-- ✅ Package structure: src/grounded_answers/
-- ✅ Settings class: pydantic-settings with PostgresDsn, RedisDsn, Literal types
-- ✅ Configuration: environment-based, validated at startup, cached with @lru_cache
-- ✅ /health endpoint (liveness probe, no external deps)
-- ✅ CORS middleware with allowlist from settings (no `"*"`)
-- ✅ Tests: 10 passing
-  - Settings loading from env, validation errors, caching
-  - Health endpoint, CORS headers (allowed/disallowed origins)
-- ✅ Quality gates: ruff lint + format, mypy strict, pytest
-- ✅ CI/CD: GitHub Actions job with all checks
+### Backend (FastAPI, Python 3.12)
+- ✅ Package structure, settings (pydantic-settings), `/health`, CORS allowlist (no `"*"`)
+- ✅ Quality gates: ruff, mypy strict, pytest; CI job
 
-### Frontend (Next.js 16 + React 19 + TypeScript)
-- ✅ Scaffold with create-next-app (TypeScript, Tailwind, App Router, src/)
-- ✅ Disabled Next.js telemetry
-- ✅ TypeScript strict mode enabled
-- ✅ npm scripts: dev, build, start, lint, typecheck, test
-- ✅ StatusCard component: calls /health, shows online/offline/loading
-- ✅ Tests: 4 passing (Vitest + React Testing Library)
-  - Online, offline, loading states; fetch mocking
-- ✅ Quality gates: eslint, tsc --noEmit, vitest, npm audit, npm build
-- ✅ CI/CD: GitHub Actions job with all checks
+### Frontend (Next.js 16, React 19, TypeScript)
+- ✅ Scaffold, strict TypeScript, StatusCard, Vitest tests
+- ✅ Quality gates: eslint (now v10), tsc, vitest, npm audit, build; CI job
 
-### Documentation
-- ✅ docs/SPEC.md (product requirements)
-- ✅ docs/PROGRESS.md (this file)
-- ✅ docs/LEARNING_LOG.md (key concepts, decisions, problems/solutions)
-- ✅ docs/adr/0001-monorepo-layout.md
-- ✅ docs/adr/0002-dependency-managers.md
-- ✅ docs/adr/0003-valkey-cache.md
+### CI/CD and security
+- ✅ `.github/workflows/ci.yml`: backend, backend-db, frontend, security (gitleaks)
+- ✅ `.github/dependabot.yml`: weekly, with a 7-day cooldown on uv, npm and github-actions
+- ✅ `.gitleaks.toml`, `docs/SECURITY.md` (known advisories)
 
-### CI/CD
-- ✅ .github/workflows/ci.yml
-  - Backend job: uv sync, ruff, mypy, pip-audit, pytest
-  - Frontend job: npm ci, eslint, typecheck, vitest, **npm audit --omit=dev** (blocking), npm audit (non-blocking), npm build
-  - Security job: gitleaks (full history scan) with custom allowlist for Docker image tags
-  - Concurrency: cancel-in-progress on new push
-  - Caching: uv wheels, npm packages
-  - All actions pinned to commit SHAs (supply-chain security)
-- ✅ .github/dependabot.yml
-  - Three ecosystems: github-actions, npm (frontend), uv (backend)
-  - Weekly schedule (Monday 03:00 UTC)
-  - Grouping: minor + patch updates grouped, major updates separate
-  - Ignores: semver-major updates for @types/node (must match Node 24 runtime)
-  - Limit: max 5 open PRs per ecosystem
-- ✅ .gitleaks.toml
-  - Custom allowlist for Docker image version tags (7.4.11-alpine, 9.1.2-alpine3.24, etc.)
-  - Extends default rules with [extend] useDefault = true
-- ✅ docs/SECURITY.md
-  - Threat model structure (TBD Session 2)
-  - Known vulnerabilities: braces (GHSA-vfj7-8cjw-p6xm, no patch yet; dev-only mitigation via --omit=dev)
-  - Security controls inventory: RLS, secrets, validation, CORS, rate-limiting, audit logging (TBD)
-  - Pre-production checklist
+## Local environment notes
 
-### Code Quality & Testing
-- ✅ Test isolation: autouse fixture in conftest.py (not duplicated in test_config.py)
-  - Tests run without backend/.env (set via monkeypatch in conftest)
-  - cache_clear() called before/after each test to prevent cache cross-talk
-- ✅ Import-time side effects removed
-  - Deleted module-level `app = create_app()` from main.py
-  - Uvicorn now uses `--factory` flag to load app from create_app function
-  - Prevents import-time DB/cache initialization (improves testing)
-- ✅ All checks pass: ruff, mypy, pytest (10 backend), eslint, typecheck, vitest (4 frontend)
-
-## In Progress
-(None — all step (c) work done, Session 1 complete)
-
-## Next Session (Session 2) Starts Here
-
-### Priority Tasks
-1. ✅ **ESLint 9 → 10 Upgrade** (done Session 2, Step 1: eslint 10.13.0; plugin peer gap tracked in SECURITY.md, review 2026-12-01)
-   - ESLint 9 is end-of-support; upgrade to ESLint 10 immediately
-   - Before upgrading: verify eslint-config-next supports ESLint 10 via official docs/changelog
-   - Read ESLint 10 migration notes carefully
-   - Upgrade deliberately, run all frontend checks (lint, typecheck, test, build)
-   - Commit result with clear message
-
-2. **Database Schema & Multi-Tenancy**
-   - Create Alembic migration structure (migrations/ folder, env.py, versions/)
-   - Database schema:
-     - `tenants` table (id, name, created_at)
-     - `users` table (id, tenant_id, email, role: admin/employee/viewer, created_at)
-     - `documents` table (id, tenant_id, name, content_type, size, created_by, created_at, updated_at)
-     - `chunks` table (id, document_id, content, embedding, metadata, created_at)
-   - Create limited `app_user` PostgreSQL role (superusers/table owners bypass RLS)
-   - Row-Level Security (RLS) policies:
-     - `documents`: users see only their tenant's documents
-     - `chunks`: users see only chunks from their tenant's documents
-   - Add `/ready` endpoint: checks PostgreSQL + Valkey connectivity, returns 503 if unavailable
-   - Write tenant isolation tests in CI: cross-tenant queries blocked
-   - Run all checks, add integration tests for RLS
-   - Commit with clear message
-
-### Follow-on Tasks
-- Retrieval & Ingestion (document upload, chunking, embeddings)
-- Answering (LLM integration, prompt engineering, citations)
-- Admin Features (document management, user management, analytics)
-- Evaluation (eval dataset, metrics, dashboards)
-
-## To Do (Session 3+)
-
-### Retrieval & Ingestion
-- Document upload: PDF/DOCX/TXT/Markdown with file size limits
-- Text extraction: pypdf, python-docx, etc.
-- Chunking: size, overlap, section-aware splitting
-- Vector embeddings: pgvector in Postgres, embedding model (hosted or local)
-- Hybrid retrieval: keyword search + vector search, reranking (optional)
-
-### Answering
-- LLM integration: Claude API (or other provider), with provider abstraction
-- Prompt engineering: instructions, context, citation format
-- Citation extraction: quoted spans from source documents
-- Refusal on weak/missing evidence
-- Conversation context (multi-turn follow-ups)
-
-### Multi-Tenancy
-- Tenant model in database
-- Row-Level Security (RLS) in PostgreSQL
-- Tenant isolation tests in CI
-
-### Admin Features
-- Document management: upload, replace, delete (soft/hard)
-- User management: roles (admin, employee), per-tenant
-- Analytics dashboard: questions/day, refusal rate, helpfulness, cost/answer
-- Evaluation dashboard: eval results over time
-
-### Readiness & Production
-- /ready endpoint: checks DB, cache connectivity
-- Health-check tests
-- Error handling: explicit error messages, not bare except
-- Logging: structured, no secrets, retention policy
-- Secret management: .env (dev), environment variables (prod)
-
-### Evaluation (Built-in)
-- Evaluation dataset: questions, expected answers, source docs, unanswerable cases
-- Eval runner: automated scoring on demand + in CI
-- Metrics: recall@5, groundedness, citation accuracy, refusal accuracy
-- Charts: results over time
-
-### Channels (v1)
-- Web chat (Next.js) — started (StatusCard shows API status)
-- Telegram bot — pending
-- Admin panel — pending
-
-### Testing & Security
-- Tenant isolation tests: cross-tenant queries blocked
-- Prompt injection tests: document content treated as data
-- Rate limiting: per user, per tenant
-- Audit log: admin actions (upload, delete, user changes)
-- Secret scanning: gitleaks in CI (done), pre-commit hooks (todo)
-
-## Local Environment Notes
-
-- **Windows PostgreSQL**: Stop local PostgreSQL 17/18 services and set to Manual startup (not Automatic). Docker Compose provides isolated services.
-- **Node.js**: Requires Node >= 24.15 (jsdom 30 needs this). Currently running 24.20. Use `.nvmrc` to pin version.
-- **Backend**: Run uvicorn with `--factory` flag (not module-level app instantiation).
-- **npm audit**: Known advisory (braces, GHSA-vfj7-8cjw-p6xm, dev-only) documented in `docs/SECURITY.md`. CI gates on `--omit=dev`.
-
-## Data Plan
-
-- **Session 3**: Ingest Indus Freight Lines documents (mix of PDF and DOCX formats) into test environment.
-- **Before Session 4**: Create ~50 synthetic evaluation questions covering:
-  - Direct facts (shipper details, pricing, routing)
-  - Comparison queries (rates across corridors, service levels)
-  - Unanswerable questions (edge cases, missing data)
-  - Multi-turn follow-ups
-  These questions seed the eval dataset and CI evaluation runs.
+- **Windows PostgreSQL:** stop any local PostgreSQL 17/18 service. Docker Compose provides the database on `127.0.0.1:5432`.
+- **Node.js:** 24.15 or later (`.nvmrc`).
+- **Backend:** run uvicorn with `--factory` and `--loop grounded_answers.runtime:selector_loop_factory`.
+- **Database tests:** need Docker running and `TEST_ADMIN_DATABASE_URL` and `PSQL_COMMAND` set (RUNBOOK, "Running Database Tests").
+- **Local `.env` files** are git-ignored. `CORS_ORIGINS` and `NEXT_PUBLIC_API_URL` must use `127.0.0.1`, not `localhost` (RUNBOOK, Dev Host Rule).
 
 ## Notes
-- All checks (backend + frontend) pass with zero warnings
-- Tests are independent; no reliance on developer .env files
-- CORS configured with allowlist (not wildcard)
-- Telemetry disabled (frontend)
-- uv.lock and package-lock.json committed for reproducibility
+
+- Tests are independent. None relies on a developer's `.env`.
+- CORS is an allowlist with credentials and exact origins.
+- Telemetry is disabled in the frontend.
+- `uv.lock` and `package-lock.json` are committed.
