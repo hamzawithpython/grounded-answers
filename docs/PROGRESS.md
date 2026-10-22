@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 3 complete; Session 4 starts with migration 0005)
+**Last updated:** 2026-10-22 (Session 4, Step 1a built on `feat/job-queue-foundation`, awaiting review)
 
 ## Session 3 complete (2026-10-22)
 
@@ -11,13 +11,32 @@
 | 3a | Keys, login, per-request checks (ADR 0012) | ✅ Merged | #18 |
 | 3b | Refresh rotation, reuse, logout (ADR 0013) | ✅ Merged | #19 |
 | 3c | Login limits in Valkey, timing floor (ADR 0014) | ✅ Merged | #20 |
-| 4 | Background job runner decision: Procrastinate (ADR 0015) | 🟡 PR #21, awaiting merge | #21 |
+| 4 | Background job runner decision: Procrastinate (ADR 0015) | ✅ Merged (`0e70fa9`) | #21 |
 
 Open from Session 3: the `icacls` and HMAC key steps on your machine (RUNBOOK, Auth keys), and the Step 8 docs
 from Session 2 (SECURITY, RUNBOOK, LEARNING_LOG, CHANGELOG). The R9 rowcount check is in place for the first app
 UPDATE or DELETE.
 
-## Session 4 plan
+## Session 4 status
+
+Steps are split as you decided. Each step has its own branch and PR, and stops for review.
+
+| Step | Work | State |
+|---|---|---|
+| 1a | Migration `0005` (Procrastinate 3.10.0 in schema `queue`), grants, catalog guard, connector and enqueue tests (ADR 0016) | 🟡 PR open on `feat/job-queue-foundation`, awaiting review. 119 unit and 182 DB tests pass. |
+| 1b | Worker entry point (`worker_user`), `WorkerSettings`, enqueue helper with id-only arguments, `begin_worker_transaction`, poison-job test | Not started |
+| 2 | File storage decision, then implementation behind `storage_key` | Not started |
+| 3 | Upload endpoint (tenant_admin, 10 MiB, magic bytes, sha256 dedupe, one transaction) | Not started |
+| 4 to 8 | Extraction decision, chunks and embeddings, ingestion worker, replace/delete/purge, end-to-end with `demo-data/` | Not started |
+
+**Decided in 1a (ADR 0016):** `app_user` gets `SELECT (id)` on `procrastinate_jobs`, `INSERT (job_id, type, at)` on `procrastinate_events` and `USAGE` on the events sequence, so enqueue works. R17 accepted: `app_user` reads job ids across tenants (ids only). `psycopg-pool` (LGPL-3.0-only, unmodified) accepted.
+
+**Known open issue (not Session 4):** `tests/db/test_rate_limit.py::test_hard_lock_after_fifty_failures_and_operator_release`
+failed once in three full DB runs. Being fixed in a separate PR before Step 1b (see "Next").
+
+**Other 1a facts:** `EXPECTED_SCHEMA_HEAD` moved to `0005_procrastinate_schema`. The bootstrap (`scripts/bootstrap_database.sql`) creates schema `queue` and sets `search_path = grounded, queue` for `app_user` and `worker_user`. Existing dev databases must re-run the bootstrap (RUNBOOK) before `alembic upgrade head`.
+
+## Session 4 plan (original, as written in Session 3)
 
 1. **Migration 0005:** Procrastinate 3.10.0's schema, grants for `app_user` and `worker_user`, and the catalog
    guard entries (ADR 0015, decisions 1 and 2). The exact grant list comes from the function bodies. Upgrades are
@@ -105,9 +124,10 @@ Each step has its own branch and stops for review. Nothing is committed on `main
 
 ## Next session starts here
 
-1. Session 4, migration 0005: Procrastinate's schema and grants (see Session 4 plan above).
-2. Then upload and ingestion, the purge job, and periodic cleanup.
-3. Before Session 4 ends: finish the Session 2 Step 8 docs and the `icacls` step on your machine.
+1. Review the Step 1a PR (`feat/job-queue-foundation`). Do not merge until you approve.
+2. Separate PR: fix the flaky rate-limit test (root cause and repeated-run proof).
+3. Step 1b: worker, `WorkerSettings`, enqueue helper, poison-job test.
+3. Before Session 4 ends: finish the Session 2 Step 8 docs, the `icacls` step on your machine, and the LEARNING_LOG entry for Session 4.
 
 ## Completed before Session 2
 

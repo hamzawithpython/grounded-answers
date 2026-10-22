@@ -411,6 +411,7 @@ When it's created, the table will follow the same rules:
 | `tenants` | ENABLE + FORCE | `app_user`: SELECT own row only. `auth_definer`: SELECT (login, `status` only). `migration_role`: all (operator). |
 | `tenant_email_domains` | ENABLE + FORCE | `app_user`: SELECT, own tenant. `provisioning_definer`: SELECT, own tenant. `migration_role`: all (operator, the only writer). |
 | `grounded.retention_due_tenant_ids()` | n/a (function) | Returns tenant ids only. Owner `retention_definer`, which has SELECT on `documents` and `document_versions` through `USING (true)` policies limited to that role. |
+| `queue.*` (Procrastinate job queue, ADR 0015, 0016) | **none, by design** | No tenant column, so no RLS. Carries ids and job state only. Grants are the reviewed list in `tests/db/expected_queue_grants.json`; PUBLIC has none. Residual risk R17. |
 
 - "Scoped to current tenant" means `tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid`. With no tenant set, every policy returns zero rows (fail closed).
 - **Tenant-owned tables are never written without a tenant.** `app_user`'s INSERT on `users` is the only INSERT that isn't tenant-scoped at the policy level. It's safe because a user row has no tenant access until a membership row exists, and the membership insert is tenant-scoped.
