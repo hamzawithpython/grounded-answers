@@ -17,7 +17,8 @@ BEGIN
       ('app_user', true),
       ('worker_user', true),
       ('auth_definer', false),
-      ('retention_definer', false)
+      ('retention_definer', false),
+      ('provisioning_definer', false)
     ) AS t(name, can_login)
   LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r.name) THEN
@@ -38,6 +39,7 @@ ALTER ROLE app_user NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 ALTER ROLE worker_user NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 ALTER ROLE auth_definer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 ALTER ROLE retention_definer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+ALTER ROLE provisioning_definer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 
 -- 3. Verifiers from the environment. An unset variable leaves the psql variable undefined,
 --    so each check stops the run with a clear message (ON_ERROR_STOP).
@@ -68,3 +70,5 @@ GRANT auth_definer TO migration_role WITH INHERIT FALSE;
 GRANT auth_definer TO migration_role WITH SET TRUE;
 GRANT retention_definer TO migration_role WITH INHERIT FALSE;
 GRANT retention_definer TO migration_role WITH SET TRUE;
+GRANT provisioning_definer TO migration_role WITH INHERIT FALSE;
+GRANT provisioning_definer TO migration_role WITH SET TRUE;

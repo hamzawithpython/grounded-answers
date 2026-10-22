@@ -31,7 +31,7 @@ def test_wrong_password_is_refused(grounded_db: DbHandle, role: str) -> None:
         psycopg.connect(grounded_db.url_for(role, wrong))
 
 
-@pytest.mark.parametrize("role", ["auth_definer", "retention_definer"])
+@pytest.mark.parametrize("role", ["auth_definer", "retention_definer", "provisioning_definer"])
 def test_definer_roles_cannot_log_in(grounded_db: DbHandle, role: str) -> None:
     """
     Definer roles are NOLOGIN: they run functions but never hold a client session.

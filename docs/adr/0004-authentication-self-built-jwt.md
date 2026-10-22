@@ -325,3 +325,32 @@ Settings: frontend `next dev -H 127.0.0.1` (the `dev` script), `NEXT_PUBLIC_API_
 
 - ADR 0001 Monorepo Layout · ADR 0002 Dependency Managers · ADR 0003 Valkey (rate limits and lockout)
 - Pending: ADR 0005 (database access layer), ADR 0006 (DB-dependent test strategy)
+
+## Amendment (2026-10-22): employee creation through create_tenant_user (decision B)
+
+**Decision.** `app_user` has no INSERT on `users` or `tenant_memberships`. Employees are created only by `grounded.create_tenant_user(p_email, p_display_name, p_role)`. The actor and the tenant are not parameters: they come from the session settings `app.current_user` and `app.current_tenant`, which the one auth code path sets together in the same transaction. It is a narrow `SECURITY DEFINER` function owned by a new `provisioning_definer` role (NOLOGIN, NOBYPASSRLS, owns only this function). It writes the user and the membership in one transaction, so a membership-less user cannot be created through the app.
+
+**What the function checks, in order** (any failure raises the same error):
+1. The tenant comes from the session setting `app.current_tenant`, never from a parameter. Likewise the actor, from `app.current_user`.
+2. The actor (`app.current_user`) is an active `tenant_admin` of that tenant.
+3. The email's domain is on `tenant_email_domains` for that tenant (see below).
+4. The role is `employee` or `tenant_admin`, and the display name and email are well-formed.
+5. The insert of the user and membership runs in a sub-transaction. A unique violation on the email raises the same error.
+
+**Generic errors.** Every refusal returns SQLSTATE `P0001` and the message `could not create this user`. The caller cannot tell a wrong domain, a duplicate email (in this tenant or another), a non-admin actor, another tenant's admin, or a missing tenant from each other. Tests compare SQLSTATE and message across all six causes.
+
+**Allowlist (squatting mitigation).** `tenant_email_domains` is a tenant-owned allowlist. `app_user` can read its own tenant's rows. Only `migration_role` (the operator and admin CLI) writes it. An admin can create accounts only at domains the operator has approved for that tenant.
+
+**Defence in depth, not a hard boundary.** The actor id and the tenant come from session values the app sets (`app.current_user` and `app.current_tenant`). A compromised app process could send any actor id for the session tenant. The function's checks stop the cases a buggy or unprivileged caller would hit, but they do not stop an app that already controls the session. The hard boundary is that the app can only reach this function, not the tables behind it.
+
+**Residual risks (accepted for v1):**
+- **Email squatting inside an approved domain.** A tenant admin can create an account for any name at an approved domain, including a person who has not joined yet. Only email verification removes this, and v1 sends no email (v2).
+- **Enumeration by the admin.** The global email uniqueness is an oracle, but only for an authenticated admin, and the generic error keeps the oracle to yes-or-no per attempt. Mitigation: rate limit on the create endpoint and an audit entry per attempt (application layer, Step 6+).
+- **Orphan users.** Not possible through the function (one transaction). Possible only through direct database access by migration_role.
+
+**Why not an INSERT policy on users (option A).** It would let app_user create any user, including orphans and other tenants' employees, with no tenant check on the user row itself (users has no tenant column). Rejected.
+
+**Why not an invitation table (option C).** It moves squatting to acceptance time, where it is no less risky without email verification, and adds a table and a flow that v1 does not need.
+
+Tests: `tests/db/test_create_tenant_user.py` (success, every refusal, identical refusals, no row created on refusal) and `tests/db/test_rls_insert.py` (cross-tenant INSERT refused on every table, including `audit_log` with a NULL actor).
+

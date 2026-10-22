@@ -17,8 +17,7 @@ Failures raise. Nothing is skipped: a missing database or psql is an error (ADR 
 import os
 import secrets
 import shlex
-import subprocess
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit, urlunsplit
@@ -33,6 +32,8 @@ from grounded_answers.scram import build_verifier
 
 from .database import LOGIN_ROLES, DbHandle
 from .guard import TEST_DB_NAME, check_targets
+from .psql import run_sql_file
+from .seed import Seeded, seed
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
@@ -61,33 +62,6 @@ def _dev_urls() -> list[str]:
     return urls
 
 
-def _run_sql_file(
-    psql: list[str],
-    sql_file: Path,
-    dbname: str,
-    env: Mapping[str, str],
-    redact: list[str],
-) -> None:
-    """Pipe one SQL file to psql. On failure, raise with stderr, redacting verifiers."""
-    result = subprocess.run(  # noqa: S603 - PSQL_COMMAND is operator config from the env, not input (ADR 0006)
-        [*psql, "-X", "-U", "postgres", "-d", dbname, "-v", "ON_ERROR_STOP=1", "-f", "-"],
-        input=sql_file.read_bytes(),
-        env=dict(env),
-        cwd=REPO_ROOT,
-        capture_output=True,
-        check=False,
-        timeout=180,
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.decode("utf-8", "replace")
-        for value in redact:
-            stderr = stderr.replace(value, "<redacted>")
-        raise RuntimeError(
-            f"{sql_file.name} failed in {dbname!r} (psql exit {result.returncode}):\n"
-            f"{stderr[-2000:]}"
-        )
-
-
 @pytest.fixture(scope="session")
 def grounded_db() -> Iterator[DbHandle]:
     """Fresh grounded_answers_test with cluster and database bootstrap applied."""
@@ -110,8 +84,8 @@ def grounded_db() -> Iterator[DbHandle]:
         env[f"{role.upper()}_SCRAM"] = verifier
     redact = list(verifiers.values())
 
-    _run_sql_file(psql, SCRIPTS_DIR / "bootstrap_cluster.sql", "postgres", env, redact)
-    _run_sql_file(psql, SCRIPTS_DIR / "bootstrap_database.sql", TEST_DB_NAME, env, redact)
+    run_sql_file(psql, SCRIPTS_DIR / "bootstrap_cluster.sql", "postgres", env, redact)
+    run_sql_file(psql, SCRIPTS_DIR / "bootstrap_database.sql", TEST_DB_NAME, env, redact)
 
     # Schema: the migrations run as migration_role, the same role production uses (ADR 0005).
     admin_parts = urlsplit(admin_url)
@@ -141,3 +115,9 @@ def grounded_db() -> Iterator[DbHandle]:
         passwords=MappingProxyType(passwords),
         verifiers=MappingProxyType(verifiers),
     )
+
+
+@pytest.fixture(scope="session")
+def seeded(grounded_db: DbHandle) -> Seeded:
+    """Two complete tenants, written as the cluster admin (RLS bypass, test setup only)."""
+    return seed(grounded_db.admin_test_url())

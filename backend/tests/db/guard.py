@@ -12,6 +12,11 @@ from urllib.parse import urlsplit
 # environment variable can point the drop at another database.
 TEST_DB_NAME = "grounded_answers_test"
 
+# The round-trip test builds and drops its own database (its own schema lifecycle, so it can
+# never affect the session database). Only these two names may ever be dropped by the tests.
+ROUNDTRIP_DB_NAME = "grounded_answers_test_roundtrip"
+SCRATCH_DB_NAMES = frozenset({TEST_DB_NAME, ROUNDTRIP_DB_NAME})
+
 # The admin URL must connect to the maintenance database, never to a database we keep.
 MAINTENANCE_DB_NAME = "postgres"
 
@@ -50,3 +55,12 @@ def check_targets(admin_url: str, dev_urls: Iterable[str] = ()) -> None:
             raise GuardError("guard: TEST_ADMIN_DATABASE_URL is the same as a dev URL")
         if database_name(dev_url) == TEST_DB_NAME:
             raise GuardError(f"guard: a dev URL names the test database '{TEST_DB_NAME}'")
+
+
+def check_scratch_database(name: str) -> None:
+    """Refuse to drop or create any database name that is not one of the scratch names."""
+    if name not in SCRATCH_DB_NAMES:
+        raise GuardError(
+            f"guard: '{name}' is not a scratch test database; tests may only use "
+            f"{sorted(SCRATCH_DB_NAMES)}"
+        )

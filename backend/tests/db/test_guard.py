@@ -3,7 +3,14 @@
 import psycopg
 import pytest
 
-from .guard import TEST_DB_NAME, GuardError, check_targets, database_name
+from .guard import (
+    ROUNDTRIP_DB_NAME,
+    TEST_DB_NAME,
+    GuardError,
+    check_scratch_database,
+    check_targets,
+    database_name,
+)
 
 ADMIN_OK = "postgresql://postgres:admin-secret@127.0.0.1:5432/postgres"
 DEV_URL = "postgresql+psycopg://postgres:dev-secret@127.0.0.1:5432/grounded_answers"
@@ -62,3 +69,16 @@ def test_database_name_parses_scheme_variants() -> None:
     """Dev URLs use postgresql+psycopg://, tests use postgresql://. Both parse the same way."""
     assert database_name(DEV_URL) == "grounded_answers"
     assert database_name(ADMIN_OK) == "postgres"
+
+
+def test_scratch_names_are_accepted(no_connections: None) -> None:
+    """Both scratch databases may be created and dropped."""
+    check_scratch_database(TEST_DB_NAME)
+    check_scratch_database(ROUNDTRIP_DB_NAME)
+
+
+@pytest.mark.parametrize("name", ["grounded_answers", "postgres", "grounded_answers_test_x"])
+def test_any_other_name_is_refused(no_connections: None, name: str) -> None:
+    """The dev database, the maintenance database and look-alike names are never dropped."""
+    with pytest.raises(GuardError, match="not a scratch test database"):
+        check_scratch_database(name)

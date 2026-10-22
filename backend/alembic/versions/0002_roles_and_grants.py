@@ -35,11 +35,11 @@ UP: Sequence[str] = (
     # --- app_user (web app) ---
     "GRANT SELECT (id, name, slug, status, created_at) ON grounded.tenants TO app_user",
     "GRANT SELECT (id, email, display_name, active, created_at) ON grounded.users TO app_user",
-    "GRANT INSERT ON grounded.users TO app_user",
     "GRANT UPDATE (display_name, active) ON grounded.users TO app_user",
     # Write-only: the hash can be set (password change or reset), never read back.
     "GRANT UPDATE (password_hash) ON grounded.users TO app_user",
-    "GRANT SELECT, INSERT ON grounded.tenant_memberships TO app_user",
+    # No INSERT on tenant_memberships: memberships are created only by create_tenant_user (0003).
+    "GRANT SELECT ON grounded.tenant_memberships TO app_user",
     "GRANT UPDATE (role, active) ON grounded.tenant_memberships TO app_user",
     "GRANT SELECT, INSERT ON grounded.documents TO app_user",
     "GRANT UPDATE (title, current_version_id, deleted_at, purge_after) "

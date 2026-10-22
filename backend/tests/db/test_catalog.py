@@ -64,7 +64,7 @@ def test_login_roles_have_no_superuser_or_bypassrls(catalog: psycopg.Connection,
     assert attrs["rolcanlogin"] is True
 
 
-@pytest.mark.parametrize("role", ["auth_definer", "retention_definer"])
+@pytest.mark.parametrize("role", ["auth_definer", "retention_definer", "provisioning_definer"])
 def test_definer_roles_are_nologin_and_not_bypassrls(
     catalog: psycopg.Connection, role: str
 ) -> None:
@@ -140,7 +140,8 @@ def _actual_grants(conn: psycopg.Connection) -> list[str]:
     """
     Every grant on grounded objects to a role other than the owner, as stable strings.
 
-    Reads the ACLs directly (pg_class, pg_attribute, pg_proc, pg_namespace). The
+    Excludes each object's owner (its own rights are not grants). Reads the ACLs directly
+    (pg_class, pg_attribute, pg_proc, pg_namespace). The
     information_schema column view also lists columns implied by table grants, so it
     would make the expected list unreadable. coalesce(..., acldefault(...)) makes the
     defaults visible too: a default that grants EXECUTE to PUBLIC shows up as a grant.
@@ -154,7 +155,7 @@ def _actual_grants(conn: psycopg.Connection) -> list[str]:
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace,
              aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
         WHERE n.nspname = 'grounded' AND c.relkind IN ('r', 'p')
-          AND a.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'migration_role')
+          AND a.grantee <> c.relowner
         """
     ).fetchall():
         found.append(f"{grantee}|table:{name}|{privilege}")
@@ -167,7 +168,7 @@ def _actual_grants(conn: psycopg.Connection) -> list[str]:
              JOIN pg_namespace n ON n.oid = c.relnamespace,
              aclexplode(att.attacl) a
         WHERE n.nspname = 'grounded' AND att.attnum > 0 AND NOT att.attisdropped
-          AND a.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'migration_role')
+          AND a.grantee <> c.relowner
         """
     ).fetchall():
         found.append(f"{grantee}|column:{table}.{column}|{privilege}")
@@ -179,7 +180,7 @@ def _actual_grants(conn: psycopg.Connection) -> list[str]:
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace,
              aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
         WHERE n.nspname = 'grounded'
-          AND a.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'migration_role')
+          AND a.grantee <> p.proowner
         """
     ).fetchall():
         found.append(f"{grantee}|routine:{name}|{privilege}")
@@ -191,7 +192,7 @@ def _actual_grants(conn: psycopg.Connection) -> list[str]:
         FROM pg_namespace n,
              aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a
         WHERE n.nspname = 'grounded'
-          AND a.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'migration_role')
+          AND a.grantee <> n.nspowner
         """
     ).fetchall():
         found.append(f"{grantee}|schema:grounded|{privilege}")

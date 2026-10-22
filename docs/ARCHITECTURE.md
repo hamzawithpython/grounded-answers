@@ -401,14 +401,15 @@ When it's created, the table will follow the same rules:
 | Table | RLS | Policies |
 |---|---|---|
 | `tenants` | ENABLE + FORCE | `app_user`: SELECT own row. `auth_definer`: SELECT (login). Migration role: all (operator). |
-| `users` | ENABLE + FORCE | `app_user`: tenant-scoped SELECT and UPDATE (member of current tenant). **INSERT** for employee creation, with `WITH CHECK (true)`: the membership insert in the same transaction is the real gate (ADR 0004 amendment). `auth_definer`: SELECT (login). |
-| `tenant_memberships` | ENABLE + FORCE | `app_user`: tenant-scoped SELECT, **INSERT** (`WITH CHECK tenant_id = current tenant`), UPDATE. `auth_definer`: SELECT (login). |
+| `users` | ENABLE + FORCE | `app_user`: SELECT and UPDATE through a membership in the current tenant. **No INSERT**: employees are created by `create_tenant_user` (ADR 0004 amendment). `provisioning_definer`: INSERT, `WITH CHECK (true)` (users is global; the membership insert in the same function is the gate). `auth_definer`: SELECT (login). |
+| `tenant_memberships` | ENABLE + FORCE | `app_user`: tenant-scoped SELECT and UPDATE. **No INSERT** (only `create_tenant_user`). `provisioning_definer`: SELECT and INSERT, scoped to the session tenant. `auth_definer`: SELECT (login). |
 | `documents` | ENABLE + FORCE | `app_user`: scoped to current tenant. `worker_user`: scoped to current tenant, SELECT and DELETE (DELETE only when deleted and with no versions left). |
 | `document_versions` | ENABLE + FORCE | `app_user`: scoped to current tenant. `worker_user`: scoped to current tenant. UPDATE only `retired` to `purging`. DELETE only when `purging`. |
 | `audit_log` | ENABLE + FORCE | `app_user`: scoped to current tenant, `INSERT` and `SELECT` only. `worker_user`: `INSERT` only. |
 | `refresh_tokens` | ENABLE + FORCE | `app_user`: scoped to current tenant. `auth_definer`: SELECT (refresh). |
-| `password_reset_tokens` | ENABLE + FORCE | `app_user`: scoped to current tenant. |
-| `tenants` | ENABLE + FORCE | `app_user`: SELECT own row only. `auth_definer`: SELECT (login, `status` only). Migration role: all (operator). |
+| `password_reset_tokens` | ENABLE + FORCE | `app_user`: scoped to current tenant (SELECT, INSERT, UPDATE). |
+| `tenants` | ENABLE + FORCE | `app_user`: SELECT own row only. `auth_definer`: SELECT (login, `status` only). `migration_role`: all (operator). |
+| `tenant_email_domains` | ENABLE + FORCE | `app_user`: SELECT, own tenant. `provisioning_definer`: SELECT, own tenant. `migration_role`: all (operator, the only writer). |
 | `grounded.retention_due_tenant_ids()` | n/a (function) | Returns tenant ids only. Owner `retention_definer`, which has SELECT on `documents` and `document_versions` through `USING (true)` policies limited to that role. |
 
 - "Scoped to current tenant" means `tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid`. With no tenant set, every policy returns zero rows (fail closed).
@@ -423,6 +424,7 @@ When it's created, the table will follow the same rules:
 | `worker_user` | yes (worker only) | NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE, NOINHERIT | Retention purge job. Tenant-scoped by RLS, plus one tenant-id function. |
 | `auth_definer` | **no** (NOLOGIN) | NOBYPASSRLS | Owns the login and refresh functions (ADR 0004). |
 | `retention_definer` | **no** (NOLOGIN) | NOBYPASSRLS | Owns `retention_due_tenant_ids()` (ADR 0007). |
+| `provisioning_definer` | **no** (NOLOGIN) | NOBYPASSRLS | Owns `create_tenant_user()` (ADR 0004 amendment). |
 
 - No role has `BYPASSRLS` or `SUPERUSER`, except the cluster admin used only for bootstrap (locally the Docker `postgres` user; on a managed host, the provider's owner role). The app and the worker never connect as that role.
 - `NOINHERIT` on login roles prevents them from picking up privileges through membership in the definer roles.
