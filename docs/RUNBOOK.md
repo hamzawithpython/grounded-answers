@@ -404,6 +404,55 @@ Rules:
 
 To check the tests for the CLI: `uv run pytest -m "not db" tests/test_admin_cli.py tests/test_passwords.py`, then the DB tests with the RUNBOOK's "Running Database Tests" setup: `uv run pytest -m db tests/db/test_admin_cli.py`.
 
+## Auth keys (ADR 0004, Session 3 Step 3a)
+
+Access tokens are signed with Ed25519. The private keys live in one JSON file outside the repository. Only the API process reads it. The key file never goes in `.env`, and `.env.example` holds names only.
+
+### Create the key file (first time)
+
+```powershell
+cd C:\Users\Admin\Desktop\portfolio-v2\grounded-answers\backend
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.grounded-answers" | Out-Null
+uv run python scripts/make_jwt_keys.py --out "$env:USERPROFILE\.grounded-answers\jwt-keys.json"
+```
+
+Expected output: `Wrote C:\Users\...\jwt-keys.json with active kid ed25519-<16 hex characters>.` The script never prints key material and refuses to overwrite an existing file.
+
+### Restrict the file to your Windows user
+
+```powershell
+$k = "$env:USERPROFILE\.grounded-answers\jwt-keys.json"
+icacls $k /inheritance:r /grant:r "$($env:USERNAME):(R)"
+icacls $k
+```
+
+Expected: only your account is listed, with `(R)`. Repeat this after a Windows reinstall or a new user account.
+
+### Point the API at the file
+
+Set these in `backend\.env` (git-ignored). Use the file path only, never the key:
+
+```
+AUTH_JWT_KEYS_FILE=C:/Users/<you>/.grounded-answers/jwt-keys.json
+AUTH_LOG_HMAC_KEY=<at least 32 random characters>
+```
+
+Generate the HMAC key once, locally: `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Do not paste it into chat, tickets or commits. If `AUTH_JWT_ACTIVE_KID` is set, it must equal the file's `active` value, or startup stops.
+
+Startup fails with a message that names the setting, never its value, when the file is missing, malformed, or holds a key that is not Ed25519 or whose label does not match its public key.
+
+### Rotate the signing key
+
+1. Create a second file with `make_jwt_keys.py`, copy its one `keys` entry into the main file, and set `active` to the new kid. Keep the old entry.
+2. Restart the API. New tokens use the new key. Old tokens still verify.
+3. Wait at least 15 minutes (the access-token lifetime), then remove the old entry and restart again. Tokens signed with the removed key are refused.
+
+The unit test `test_rotation_old_key_still_verifies_until_removed` covers this order.
+
+### Dev cookie check
+
+The refresh cookie is `__Secure-refresh`. Browsers keep it only when it carries `Secure`. Local development uses `http://127.0.0.1`. The browser test result and any change to the dev HTTPS setup are recorded in ADR 0012.
+
 ## Rollback
 
 Two things roll back separately: the application and the database schema.

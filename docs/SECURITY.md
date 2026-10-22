@@ -1,6 +1,6 @@
 # Security — Threat Model and Controls
 
-**Last updated:** 2026-10-22 (Session 3, Step 2: ORM models, tenant transaction helper, R8 tests; ADR 0011). Status words are used exactly:
+**Last updated:** 2026-10-22 (Session 3, Step 3a: login, access tokens, per-request checks; ADR 0012). Status words are used exactly:
 **Built + tested** (code exists and a test proves it), **Designed** (decided in an ADR, not yet
 in code), **Not started**.
 
@@ -88,7 +88,7 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 | T12 | Test or dev run resets the dev cluster's role passwords | Separate test cluster (port 5433); guard refuses an admin URL on a dev host and port | Built + tested | `test_guard` (`test_admin_on_dev_port_with_other_user_is_refused`, `test_admin_on_dev_host_via_localhost_is_refused`) |
 | T13 | Migration credentials reach the web app | Migration URL is shell-only; `Settings` forbids unknown keys; the example file is tested | Built + tested | `test_env_example` (`test_settings_rejects_unknown_key_in_env_file`) |
 | T14 | Migration or bootstrap changes a live schema silently | Migrations are explicit SQL, applied in order, reversible; round-trip test; `EXPECTED_SCHEMA_HEAD` checked by `/ready` | Built + tested | `test_migration_round_trip`, `test_schema_head`, `test_ready` (`schema behind code`) |
-| T15 | Token forgery, algorithm confusion, refresh-token theft | EdDSA pinned, `kid` selects the key; refresh tokens hashed, rotated, with reuse detection and a 10 s grace window | Designed (ADR 0004) | No endpoints yet |
+| T15 | Token forgery, algorithm confusion, refresh-token theft | EdDSA pinned, `kid` selects the key, required claims, iss and aud checked (3a, built + tested). Refresh tokens hashed and stored (3a). Rotation, reuse detection and the 10 s grace window come in 3b. | Partly built + tested (ADR 0012) | `test_auth_tokens` (alg none, HS256 with the public key, unknown kid, tampered, expired, wrong aud or iss, missing claim), `test_auth_flows` (bad tokens over HTTP; `test_refresh_token_is_stored_as_a_hash_only`) |
 | T16 | Password guessing and spraying | Lockout keyed on (email, IP), per-IP rate limit, progressive delay, generic 401, dummy Argon2 hash for unknown emails | Designed (ADR 0004) | No endpoints yet |
 | T17 | Tenant context leaks between pooled connections | `set_config(..., true)` as the first two statements of every tenant transaction (tenant and user); `begin_tenant_transaction` is the only path; a source test forbids other setters; a fresh session per transaction | Built + tested | `test_tenant_transaction` (commit, rollback and mid-transaction error on one physical connection, `pg_backend_pid` checked; statement order and bound values), `test_tenant_context_source` (only `tenant_db.py` sets the context). The commit test fails if the helper uses session scope (checked by mutation). |
 | T18 | Lazy loading returns a silent partial result | `lazy="raise"` on every relationship; `deferred` on `users.password_hash` and `updated_at`; models mirror the migrations, checked by a drift test | Built + tested | `test_models` (every relationship is `lazy="raise"`; deferred columns; no CHECK in models), `test_orm_models` (unloaded relationship raises with no query; `select(User)` as app_user omits `password_hash`; explicit load refused), `test_orm_metadata` (Alembic comparison, plus CHECK names and definitions against `expected_checks.json`; planted drift is caught) |
@@ -119,6 +119,16 @@ Four layers. A bug in one must not be enough to leak data.
 Designed, not built. The app has no login, refresh or logout endpoints yet. The design covers: EdDSA access tokens (15 min) with a pinned algorithm; opaque refresh tokens (14 days) stored hashed, rotated per use, with family revocation on reuse; per-request tenant and membership checks from the database, never from claims; login lockout and rate limits keyed on (email, IP); generic errors; an audit trail that holds no email or password.
 
 ---
+
+## Secret scanning (gitleaks, CI `security` job)
+
+- An inline `gitleaks:allow` comment exempts one line from the scanner. It is permitted only with a written
+  reason on the same line, and every one is reviewed in the pull request that adds it. A marker never covers
+  a real secret: a real secret the scanner finds is removed, and the credential is rotated.
+- Reviewed exemptions:
+  - `backend/src/grounded_answers/auth_keys.py` (PR #18): a type annotation on the signing-key field. The
+    generic rule read the annotation's type name as a secret value. The line holds no key material, and its
+    reason is written on the line.
 
 ## Secrets and credentials
 
@@ -159,6 +169,8 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R6 | `/ready` is public and reveals which dependency is down | ADR 0009 | Names only; no hosts, versions or messages | Accepted |
 | R7 | No second reviewer. Required approvals are 0, so one maintainer can merge a PR after its checks pass. A compromised maintainer account could push code that passes CI. | Process | Four required checks; admins enforced; no force pushes | Add a second reviewer and set required approvals back to 1 when a second maintainer joins |
 | R8 | Pooled-connection leak test and `lazy="raise"` test not written | ADR 0005 | **Closed in Session 3, Step 2:** both tests are written and passing (T17, T18). | None |
+| R11 | Timing on known users: a failed login for a known user writes an audit row, an unknown email does not. A precise timing measurement could reveal which emails exist. | ADR 0012 | Verify runs on every path; generic body; only the audit write differs | Decide in 3c: a database write on the unknown path, or a fixed delay on every failure |
+| R12 | Keyed client IP uses the direct address. Behind a proxy, audit rows would show the proxy. | ADR 0012 | None needed while the API is not behind a proxy | Trusted `X-Forwarded-For` handling with hosting |
 | R9 | Rowcount checks in app write paths are not built | PROGRESS carry-over | `expect_rowcount` helper built and tested (raises and logs a line with no data); the admin CLI's domain removal refuses a 0-row delete (ADR 0010); worker transition tests assert 0-row behaviour | Use `expect_rowcount` in every app UPDATE and DELETE as they are added (Session 3, Step 3 onward) |
 | R10 | Operator actions are not attributed to a person. Audit rows from the admin CLI have `actor_user_id = NULL`. | ADR 0010 | One operator; detail holds no personal data | Record the operator's identity when a second operator is added (new ADR) |
 
