@@ -465,7 +465,16 @@ sequenceDiagram
     end
 ```
 
-### 9.2 Rules
+### 9.2 Authentication (Session 3, Step 3a; ADR 0012)
+
+- Access tokens: EdDSA JWT, 15 minutes, `iss` `grounded-answers-api`, `aud` `grounded-answers-web`, `kid` header
+  from the key file (`auth_keys.py`, `auth_tokens.py`).
+- Login: `auth_service.login`. Anonymous lookup, Argon2 verify in a worker thread on every path, checks, then
+  one tenant transaction for the refresh token and the audit row (`auth_api.py` for the routes).
+- Protected routes: `authenticated_context` verifies the token, opens the tenant transaction, and re-reads
+  membership, user and tenant status from the database. Role comes from the row.
+
+### 9.3 Rules
 
 | Rule | Enforced by |
 |---|---|

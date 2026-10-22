@@ -22,6 +22,12 @@ Dependency and tooling changes are listed here too.
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 
 ### Added
+- Session 3, Step 3a: authentication. `POST /auth/login` (generic 401, byte-identical bodies), `GET /auth/me`
+  (per-request membership, user and tenant checks; role from the database). EdDSA access tokens (15 minutes,
+  pinned algorithm, kid, required claims, 5-second leeway). Refresh token issued and stored hashed; cookie
+  `__Secure-refresh` (HttpOnly, Secure, SameSite=Lax, Path=/auth). Argon2 verify in a worker thread. 422
+  responses no longer echo input values. `scripts/make_jwt_keys.py` (key file, outside the repo). ADR 0012.
+  Dependencies: `PyJWT[crypto]>=2.15.1` (MIT), `cryptography>=50.0.2` (Apache-2.0 OR BSD-3-Clause).
 - Session 3, Step 2: ORM models for the nine tables (`models.py`), mirroring the migrations. Names checked
   by Alembic's comparison; CHECK names and definitions in `tests/db/expected_checks.json`.
 - `tenant_db.py`: `begin_tenant_transaction` (the only way to start a tenant transaction; sets tenant and user

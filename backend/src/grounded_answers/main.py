@@ -2,18 +2,46 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
+from starlette.concurrency import run_in_threadpool
 
-from grounded_answers.config import get_settings
+from grounded_answers.auth_api import router as auth_router
+from grounded_answers.auth_keys import KeyFileError, load_key_ring
+from grounded_answers.config import Settings, get_settings
 from grounded_answers.database import create_database_engine, create_session_factory
+from grounded_answers.passwords import make_dummy_hash
 from grounded_answers.readiness import (
     ReadinessChecker,
     make_cache_check,
     make_database_check,
     make_schema_check,
 )
+
+
+async def _load_auth_state(app: FastAPI, settings: Settings) -> None:
+    """
+    Load what login needs before the app takes requests (ADR 0004).
+
+    Each missing or malformed setting stops startup with a message that names the setting, never
+    its value. The dummy hash is computed once here, in a worker thread (Argon2 is CPU-heavy).
+    """
+    if settings.auth_jwt_keys_file is None:
+        raise RuntimeError("AUTH_JWT_KEYS_FILE is not set (docs/RUNBOOK.md, Auth keys)")
+    active = settings.auth_jwt_active_kid
+    try:
+        app.state.key_ring = load_key_ring(settings.auth_jwt_keys_file, expected_active_kid=active)
+    except KeyFileError as exc:
+        raise RuntimeError(f"AUTH_JWT_KEYS_FILE is not usable: {exc}") from exc
+    if settings.auth_log_hmac_key is None:
+        raise RuntimeError("AUTH_LOG_HMAC_KEY is not set (docs/RUNBOOK.md, Auth keys)")
+    secret = settings.auth_log_hmac_key.get_secret_value()
+    if len(secret) < 32:
+        raise RuntimeError("AUTH_LOG_HMAC_KEY must be at least 32 characters")
+    app.state.auth_hmac_key = secret.encode("ascii")
+    app.state.dummy_hash = await run_in_threadpool(make_dummy_hash)
 
 
 def _make_lifespan(
@@ -48,6 +76,7 @@ def _make_lifespan(
             }
         )
         try:
+            await _load_auth_state(app, settings)
             yield
         finally:
             await engine.dispose()
@@ -89,6 +118,22 @@ def create_app(readiness: ReadinessChecker | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """
+        Return where and what was wrong, never the value that was sent (ADR 0004 note).
+
+        FastAPI's default includes "input" for each error, so a bad password would be echoed back.
+        Only the location, the error type and the message are kept.
+        """
+        errors = [
+            {"type": err["type"], "loc": list(err["loc"]), "msg": err["msg"]}
+            for err in exc.errors()
+        ]
+        return JSONResponse(status_code=422, content={"detail": errors})
+
+    app.include_router(auth_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

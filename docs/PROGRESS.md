@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 3, Step 2 built on `feat/orm-models`, awaiting review and commit)
+**Last updated:** 2026-10-22 (Session 3, Step 3a built on `feat/auth-login`, awaiting review; not committed)
 
 ## Session 2 status at a glance
 
@@ -75,7 +75,7 @@ Each step has its own branch and stops for review. Nothing is committed on `main
 
 1. Step 8 docs: SECURITY.md, RUNBOOK (`/ready`, rollback, branch protection applied), LEARNING_LOG, CHANGELOG (Step 7 entries added).
 2. Local `backend/.env`: `DATABASE_URL` as `app_user` only. `MIGRATION_DATABASE_URL` goes in the shell, never in `.env` (ADR 0004; `.env.example` and CHANGELOG say so). Dev database needs the operator bootstrap and `alembic upgrade head` (applies 0004) before `/ready` returns 200 and before the admin CLI runs.
-3. Session 3, Step 3: auth endpoints (see the Session 3 plan above). Step 2 is done (see below).
+3. Session 3, Step 3a: keys, login, per-request checks. Built on `feat/auth-login` (ADR 0012), awaiting review; not committed. Browser cookie test passed (Chrome and Firefox accept `__Secure-refresh` on `http://127.0.0.1`; Safari untested, no Windows build; browser versions not recorded). Open for you: the `icacls` step and the HMAC key on your machine. Then 3b (refresh, rotation, logout) and 3c (lockout, rate limits, CSRF).
 
 ## Completed before Session 2
 
