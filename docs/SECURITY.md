@@ -1,6 +1,6 @@
 # Security — Threat Model and Controls
 
-**Last updated:** 2026-10-22 (Session 2, Step 8). Status words are used exactly:
+**Last updated:** 2026-10-22 (Session 3, Step 1: admin CLI, ADR 0010). Status words are used exactly:
 **Built + tested** (code exists and a test proves it), **Designed** (decided in an ADR, not yet
 in code), **Not started**.
 
@@ -98,6 +98,8 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 | T22 | Dependency with a known vulnerability | Dependabot with a 7-day cooldown; `pip-audit` in CI; `npm audit` | Built | CI jobs `backend`, `frontend`, `security` |
 | T23 | Cross-site request forgery on refresh | Refresh cookie is httpOnly, SameSite and exact-origin CORS; `Origin` checks (ADR 0004 cookie design) | Designed (ADR 0004) | No endpoints yet |
 | T24 | Unauthorised change to `main` | Repo is public; `main` requires 4 status checks (`backend`, `backend-db`, `frontend`, `security`), strict up-to-date checks, admins enforced, no force pushes or deletions. Required approvals are 0 (solo maintainer; see R7). | Built (verified via the branch protection API) | RUNBOOK, "Branch protection" (the verify command) |
+| T25 | Migration credential leaks through the admin CLI (argument, shell history, `.env`, or a wrong login) | Migration URL from the process environment only; hidden prompt when the URL has no password; CLI never reads `backend/.env`; passwords are never arguments; CLI refuses any login other than `migration_role`; errors show the exception class, not driver text | Built + tested | `tests/test_admin_cli.py` (`test_missing_migration_url_is_refused`, `test_invalid_url_message_does_not_echo_the_url`, `test_url_without_password_prompts_for_it`), `tests/db/test_admin_cli.py` (`test_cli_refuses_to_run_as_app_user`) |
+| T26 | Weak first-admin password, or a password hash that leaks or is weak | Policy: 12 to 256 characters, not on the 10k common-password list, typed twice; Argon2id with the pinned defaults (ADR 0010); hash stored, plaintext never stored or logged; `app_user` cannot read `password_hash` | Built + tested | `tests/test_passwords.py` (policy and pinned Argon2 parameters), `tests/db/test_admin_cli.py` (`test_create_admin_writes_user_membership_and_audit`, `test_app_user_cannot_read_the_password_hash`) |
 
 ---
 
@@ -157,7 +159,8 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R6 | `/ready` is public and reveals which dependency is down | ADR 0009 | Names only; no hosts, versions or messages | Accepted |
 | R7 | No second reviewer. Required approvals are 0, so one maintainer can merge a PR after its checks pass. A compromised maintainer account could push code that passes CI. | Process | Four required checks; admins enforced; no force pushes | Add a second reviewer and set required approvals back to 1 when a second maintainer joins |
 | R8 | Pooled-connection leak test and `lazy="raise"` test not written | ADR 0005 | Designed controls; no tenant endpoints exist yet | Write both with the first tenant endpoint and the first model |
-| R9 | Rowcount checks in app write paths are not built | PROGRESS carry-over | Worker transition tests assert 0-row behaviour | Build with the first app UPDATE or DELETE (Session 3) |
+| R9 | Rowcount checks in app write paths are not built | PROGRESS carry-over | Worker transition tests assert 0-row behaviour; the admin CLI's domain removal refuses a 0-row delete (ADR 0010) | Build with the first app UPDATE or DELETE (Session 3) |
+| R10 | Operator actions are not attributed to a person. Audit rows from the admin CLI have `actor_user_id = NULL`. | ADR 0010 | One operator; detail holds no personal data | Record the operator's identity when a second operator is added (new ADR) |
 
 ---
 
@@ -165,7 +168,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 
 - **Tenant isolation:** RLS with FORCE, fail-closed policies, column grants, tests (see table above)
 - **Secrets:** environment variables only; `.env` git-ignored; gitleaks in CI; SCRAM verifiers; test cluster separated by port and guard
-- **Input validation:** Pydantic `Settings` (unknown keys refused); password policy for database roles; file uploads size and type limited (Session 3)
+- **Input validation:** Pydantic `Settings` (unknown keys refused); password policy for database roles; account password policy (12 to 256 characters, common-password list, ADR 0010); admin CLI input checks before any database call (slug, domain, email, display name); file uploads size and type limited (Session 3)
 - **Rate limiting:** designed (ADR 0004); not built
 - **Audit logging:** `audit_log` table with an append-only grant for the app; the login and admin events are not yet written
 - **CORS:** allowlist of exact origins, no wildcard, credentials only for listed origins

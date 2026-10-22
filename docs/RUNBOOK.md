@@ -365,6 +365,45 @@ uv run --directory backend python scripts/verify_login.py app_user
 
 Expect `ALTER ROLE` from psql, then `LOGIN OK app_user`. Change `app_user` in both places to reset another role. If you reset `app_user`, update `backend\.env` (step 8).
 
+## Admin CLI (platform owner, ADR 0004, ADR 0010)
+
+The admin CLI creates tenants, manages a tenant's allowed email domains, and creates the first tenant admin. It uses `migration_role`, so run it only on the operator's machine. It is never run in the web or worker containers.
+
+Before the first run on a database, apply all migrations (`alembic upgrade head`, the migration steps in "Migration credentials" above). The `tenant_email_domains` table comes from migration `0003`.
+
+```powershell
+cd C:\Users\Admin\Desktop\portfolio-v2\grounded-answers\backend
+
+# Set the migration URL for this shell only (the helper from "Migration credentials").
+Set-MigrationUrl
+
+uv run --group operator python -m grounded_answers.admin_cli create-tenant "Indus Freight Lines" indus-freight
+uv run --group operator python -m grounded_answers.admin_cli add-domain indus-freight indusfreight.test
+uv run --group operator python -m grounded_answers.admin_cli list-domains indus-freight
+uv run --group operator python -m grounded_answers.admin_cli create-admin indus-freight admin@indusfreight.test "Head of HR"
+
+Remove-Item Env:MIGRATION_DATABASE_URL
+```
+
+Expected output for each command, in order:
+
+```text
+Created tenant 'indus-freight' (<uuid>).
+Allowed 'indusfreight.test' for tenant 'indus-freight'.
+indusfreight.test
+Created tenant admin (<uuid>) for tenant 'indus-freight'.
+```
+
+Rules:
+
+- `create-admin` checks the tenant and the email domain first, before it asks for any password. A wrong domain fails at once, with no password prompt (the domain must already be allowed with `add-domain`). Then it asks for the password twice, with no echo. The two entries must match, and the password must be at least 12 characters and not on the common-password list.
+- `remove-domain` removes the domain from the allowlist. Existing accounts keep working, so use it only to stop new accounts at that domain.
+- A refusal prints a short reason and exits with code 1. "Nothing was changed" means the whole command rolled back.
+- If the command says it must connect as `migration_role`, the URL points at another login. Fix the URL and run it again.
+- `Remove-Item Env:MIGRATION_DATABASE_URL` at the end removes the URL from the shell. Closing the window also removes it.
+
+To check the tests for the CLI: `uv run pytest -m "not db" tests/test_admin_cli.py tests/test_passwords.py`, then the DB tests with the RUNBOOK's "Running Database Tests" setup: `uv run pytest -m db tests/db/test_admin_cli.py`.
+
 ## Rollback
 
 Two things roll back separately: the application and the database schema.

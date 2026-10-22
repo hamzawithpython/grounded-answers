@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 2, in progress: Steps 1–7 built on `feat/ready-endpoint`, awaiting review; Step 8 pending)
+**Last updated:** 2026-10-22 (Session 3, Step 1 built on `feat/admin-cli`, awaiting review and commit)
 
 ## Session 2 status at a glance
 
@@ -14,7 +14,7 @@
 | 4 | Roles and migrations (0001 tables, 0002 grants) | ✅ | PR #12 |
 | 5 | RLS policies, definer functions, `create_tenant_user` (0003) | ✅ | PR #12, commit `b2192d0` (CI green) |
 | 6 | Proof by tests | 🟡 Mostly done (see below) | working tree |
-| 7 | `/ready` endpoint (redis-py 8.1.0, ADR 0008; checks and cache, ADR 0009; migration 0004) | 🟡 Built, awaiting review and commit | `feat/ready-endpoint` |
+| 7 | `/ready` endpoint (redis-py 8.1.0, ADR 0008; checks and cache, ADR 0009; migration 0004) | ✅ Merged | `main` (PRs #14, #15; branch `feat/ready-endpoint` deleted) |
 | 8 | Docs: SECURITY.md, RUNBOOK, LEARNING_LOG, CHANGELOG | 🟡 Partly done | — |
 
 ## Step 6: what the tests prove (DB suite: 83 passing, 0 skipped)
@@ -34,7 +34,6 @@ Unit suite: 38 passing. Both suites run in CI (`backend` with `-m "not db"`, `ba
 
 ## Not done yet in Session 2
 
-- **Step 7, `/ready`.** Checks PostgreSQL and Valkey with short timeouts. Returns 503 and names the failed dependency. Tests for healthy and failed cases.
 - **Step 8, docs.**
   - `docs/SECURITY.md`: threat model; tenant-isolation controls; the residual risks in ADR 0004 (email squatting inside approved domains, admin enumeration, the defence-in-depth note on the actor check); backups keep deleted content after purge (ADR 0007).
   - `docs/RUNBOOK.md`: `/ready` and rollback steps; enabling branch protection (steps given in chat, not yet applied to `main`).
@@ -45,11 +44,25 @@ Unit suite: 38 passing. Both suites run in CI (`backend` with `-m "not db"`, `ba
 
 - **App auth code path is not built yet.** The login, refresh and logout endpoints, and the step that sets `app.current_user` and `app.current_tenant` together, come with the first endpoint that needs them. `create_tenant_user` has no caller in the app yet.
 - **Branch protection on `main`** is not configured. Required checks: `backend`, `backend-db`, `frontend`, `security`. Add `backend-db` only after it has run on `main`.
-- **Retention:** `DOCUMENT_RETENTION_DAYS` is in ADR 0007, but the setting is not in `Settings` yet. Add it with the purge job (Session 3).
+- **Retention:** `DOCUMENT_RETENTION_DAYS` is in ADR 0007, but the setting is not in `Settings` yet. Add it with the purge job (Session 4).
 - **Backups:** the backup retention window depends on the hosting provider. Record it in SECURITY.md when a host is chosen.
 - **Managed Postgres:** when a host is chosen, check whether its pooler runs in transaction mode (set `prepare_threshold=None`) and whether it allows `CREATE ROLE` and `ALTER ... OWNER` (ADR 0005, ADR 0004).
 - **Windows event loop:** the dev server must start with `--loop grounded_answers.runtime:selector_loop_factory` (RUNBOOK).
 - **Dependency upgrades:** wait 7 days after a release before a manual upgrade (RUNBOOK). No date-based holds in `pyproject.toml`.
+
+## Session 3 plan: auth and foundations
+
+Uploads need authentication, so Session 3 builds auth first. Ingestion and the purge job move to Session 4. SPEC.md is unchanged (§6.1 still lists ingestion as v1 scope).
+
+1. ✅ **Admin CLI** (ADR 0004, ADR 0010; built on `feat/admin-cli`, awaiting review). Commands: create-tenant, add-domain, remove-domain, list-domains, create-admin. Click in the `operator` group; argon2-cffi for the first admin's password. Tests: unit 78 passing, DB 101 passing (incl. 11 for the CLI). `create-admin` checks the tenant and domain before the password prompt.
+   - Manual check on the dev DB passed (create-tenant, add-domain, list-domains, create-admin with hidden prompts, mismatch refused, duplicate slug refused, wrong domain refused).
+   - Dev tenant `indus-freight` (domain `indusfreight.example`, first admin `hr.manager@indusfreight.example`) now exists in the dev database.
+   - `demo-data/` (Indus Freight Lines demo documents) is the owner's work. It is not in these commits; it goes on branch `data/demo-tenant` later. No migration added: migration 0003 already covers `migration_role` writes.
+2. **`begin_tenant_transaction` helper** (ADR 0005), R8 tests (pooled-connection leak, `lazy="raise"`), first ORM models with deferred `password_hash`, rowcount check on writes with a test (R9).
+3. **Auth endpoints** (ADR 0004): login, refresh (rotation, reuse detection, 10 s grace), logout, logout-all, EdDSA keys with `kid`, lockout and rate limits in Valkey, generic errors with a dummy hash, audit entries, per-request membership and tenant-status checks. Tests for every rule in ADR 0004. Endpoint plan and key-management steps are reviewed before code.
+4. **Background job runner ADR** (for Session 4): compare Celery, arq, Dramatiq and RQ. No implementation in Session 3.
+
+Each step has its own branch and stops for review. Nothing is committed on `main`.
 
 ## Session 3 carry-over: check rowcount on every RLS-filtered write
 
@@ -59,12 +72,9 @@ Unit suite: 38 passing. Both suites run in CI (`backend` with `-m "not db"`, `ba
 
 ## Next session starts here
 
-1. Commit and merge the worker and trigger tests and this file (after approval).
-2. Review Step 7 on `feat/ready-endpoint` (unit 52 passing, DB 87 passing, lint, format and mypy clean). Then commit (Conventional Commits) after approval.
-   - Local dev: the dev database has no `grounded` schema yet, so `/ready` returns 503 `schema`. Follow the RUNBOOK operator bootstrap, then `alembic upgrade head` (applies 0004).
-   - Local `backend/.env`: `DATABASE_URL` as `app_user`, and add `MIGRATION_DATABASE_URL` as `migration_role`.
-3. Step 8: SECURITY.md, RUNBOOK (`/ready`, rollback, branch protection applied), LEARNING_LOG, CHANGELOG (Step 7 entries added).
-4. Then Session 3: retrieval and ingestion, starting with the document upload path and the purge job (with `DOCUMENT_RETENTION_DAYS`).
+1. Step 8 docs: SECURITY.md, RUNBOOK (`/ready`, rollback, branch protection applied), LEARNING_LOG, CHANGELOG (Step 7 entries added).
+2. Local `backend/.env`: `DATABASE_URL` as `app_user` only. `MIGRATION_DATABASE_URL` goes in the shell, never in `.env` (ADR 0004; `.env.example` and CHANGELOG say so). Dev database needs the operator bootstrap and `alembic upgrade head` (applies 0004) before `/ready` returns 200 and before the admin CLI runs.
+3. Session 3, Step 2: `begin_tenant_transaction`, R8 tests, first ORM models, rowcount pattern on writes (see the Session 3 plan above). The admin CLI's SQL moves to ORM models in Step 2, too.
 
 ## Completed before Session 2
 

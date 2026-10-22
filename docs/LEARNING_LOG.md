@@ -406,3 +406,72 @@ Built the data layer for multi-tenancy and the `/ready` endpoint. The main lesso
 3. `lazy="raise"` is set with the first ORM model, with its test.
 4. The purge job needs the restore procedure in the RUNBOOK before it runs in production.
 5. Before any test writes to a database, ask: which cluster does this URL point at?
+
+---
+
+# Session 3, Step 1: Admin CLI (2026-10-22)
+
+## Concepts in plain words
+
+### CLI (command-line interface)
+A program you run from a terminal with commands and options, such as `create-tenant`. The admin CLI is how the platform owner makes changes that the web app is not allowed to make. ADR 0010 explains why it uses Click.
+
+### Transitive dependency
+A package that you do not list yourself, but that one of your packages needs. Click is one: `uvicorn` needs it, so it is installed even though we did not ask for it. Declaring it ourselves (`click>=8.5.0` in the `operator` group) makes the dependency visible and tested in CI. It does not remove Click from the runtime.
+
+### Dependency group
+A named list of extra packages in `pyproject.toml`, installed only when asked for (`uv sync --group operator`). It is a way to say "this tool needs these packages" without adding them to the app.
+
+### `getpass`
+A standard-library function that asks for input without showing it on screen. It is how the CLI reads the password. A password typed as a command argument would be stored in shell history and visible in the process list, so the CLI never takes one that way.
+
+### Argon2id
+A password-hashing algorithm built to be slow and memory-hungry, so guessing is expensive. "id" is the variant that resists both side-channel and GPU attacks. A hash string holds the algorithm, its parameters, the salt and the result, so the parameters can change later without breaking old hashes.
+
+### RFC 9106 profile
+The IETF's recommended Argon2 settings. argon2-cffi's default is the second recommended profile: 64 MiB of memory, 3 passes, 4 threads. We pin those values in a test so a library upgrade cannot change them silently.
+
+### Rowcount, one more time
+A `DELETE` that matches no row is not an error in SQL. It returns zero rows. `remove-domain` uses `RETURNING` and refuses when nothing came back, so "nothing deleted" is never reported as success.
+
+## Problems Encountered & Solutions
+
+### 5. A DB test silently ran nothing
+- **What happened:** the new DB test file ran "11 deselected", with no tests run.
+- **Why:** the `db` marker was missing from the file. `pytest -m db` filters on that marker.
+- **Fix:** `pytestmark = pytest.mark.db` at the top of each DB test file. A file with DB tests and no marker is a silent gap, so check the count of selected tests after every run.
+
+### 6. Two URL schemes in one test
+- **What happened:** `psycopg.connect()` rejected `postgresql+psycopg://...`.
+- **Why:** SQLAlchemy URLs carry a driver suffix. Plain psycopg wants `postgresql://`.
+- **Fix:** the CLI passes SQLAlchemy URLs; the test's direct psycopg connections use the plain form. Each tool gets the URL format it expects.
+
+### 7. Ruff flagged test passwords as hardcoded secrets (S105)
+- **What happened:** literal strings assigned to `GOOD_PASSWORD` and similar names were reported.
+- **Why:** the rule matches on variable names, and the test values really are literal text.
+- **Fix:** test passwords come from `secrets.token_urlsafe()` at run time. No literal password is in the repo, and the policy still applies to them. The security check was not disabled.
+
+### 8. mypy could not see attributes re-exported by a module
+- **What happened:** `admin_cli.getpass` and `admin_cli.admin_service` were reported as not exported.
+- **Why:** strict mypy does not treat a module's imported names as its public attributes.
+- **Fix:** tests import the module they patch (`import getpass`, `from grounded_answers import admin_service`) and patch that module.
+
+## Interview Q&A
+
+**Q: Why not put the admin CLI in the web app?**
+A: The web app connects as `app_user`, which cannot create tenants or edit the allowlist. Giving the app the migration role would let any bug in the web code make platform changes. A separate CLI with its own credential keeps those powers out of the request path (ADR 0004).
+
+**Q: The CLI and the web app both use Click or FastAPI's dependencies. Is the separation real?**
+A: Partly, and it is important to say which part. Click is installed in the runtime environment through uvicorn, so the package is present in both. The separation is in the code and the credential: the CLI module is never imported by the app, and the migration URL is never in the app's environment or its `.env`. ADR 0010 states this.
+
+**Q: Why is the password hashed in the CLI and not in the database?**
+A: The database never sees the plaintext. The CLI hashes it with Argon2id before the insert, so the stored value is a hash. The web app's `app_user` cannot read the column at all (`permission denied`, tested).
+
+**Q: What does "salted" mean in an Argon2 hash?**
+A: A random value added to the password before hashing. Two users with the same password get different hashes, so an attacker cannot use one precomputed table for everyone. Argon2 stores the salt inside the hash string.
+
+**Q: Why refuse common passwords when the length rule already exists?**
+A: Length alone accepts `passwordpassword`. The 10,000-entry list catches the patterns attackers try first. We skip composition rules (must contain a digit), which push people toward predictable substitutions like `Password1!`.
+
+**Q: What is the risk of an operator action with no actor?**
+A: We cannot say which person did it. With one operator that is acceptable, and it is recorded as residual risk R10. Before a second operator joins, the audit row needs an identity.
