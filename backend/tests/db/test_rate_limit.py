@@ -4,7 +4,6 @@ a fake clock, so nothing sleeps and no test depends on another.
 """
 
 import asyncio
-import ipaddress
 import secrets
 from collections.abc import Iterator
 from typing import Any
@@ -21,7 +20,7 @@ from grounded_answers.rate_limit import (
     account_delay_ms,
     unlock_account,
 )
-from tests.db.auth_support import VALKEY_TEST_URL, flush_test_valkey
+from tests.db.auth_support import VALKEY_TEST_URL, flush_test_valkey, new_test_ip
 
 pytestmark = pytest.mark.db
 
@@ -69,17 +68,6 @@ def _email() -> str:
     return f"user-{secrets.token_hex(6)}@limits.test"
 
 
-_BENCHMARK_NET = ipaddress.IPv4Network("198.18.0.0/15")  # RFC 2544 benchmarking, 131,072 addresses
-
-
-def _ip() -> str:
-    # A large range, not 250 addresses: with 250, a test's random check IP matched one of its own
-    # failure IPs about 4% of the time, and the pair lock refused it. The benchmarking range is
-    # used because random full-IPv4 addresses include loopback, private and broadcast space,
-    # which trusted-proxy logic may treat differently later.
-    return str(_BENCHMARK_NET[secrets.randbelow(_BENCHMARK_NET.num_addresses)])
-
-
 async def _fail(limiter: LoginLimiter, email: str, ip: str, times: int = 1) -> None:
     for _ in range(times):
         await limiter.record_failure(email, ip)
@@ -94,7 +82,7 @@ async def _read_int(cache: Redis, key: str) -> int:
 @pytest.mark.anyio
 async def test_concurrent_failures_are_counted_exactly(limiter: LoginLimiter, cache: Redis) -> None:
     """Forty simultaneous failures for one pair: the counter is exactly 40, and the lock is set."""
-    email, ip = _email(), _ip()
+    email, ip = _email(), new_test_ip()
     await asyncio.gather(*(limiter.record_failure(email, ip) for _ in range(40)))
     keys = limiter._keys(email, ip, limiter.clock())
     assert await _read_int(cache, keys["pair_count"]) == 40
@@ -105,7 +93,7 @@ async def test_concurrent_failures_are_counted_exactly(limiter: LoginLimiter, ca
 async def test_fifth_failure_locks_the_pair_and_the_sixth_attempt_is_refused(
     limiter: LoginLimiter,
 ) -> None:
-    email, ip = _email(), _ip()
+    email, ip = _email(), new_test_ip()
     await _fail(limiter, email, ip, PAIR_LIMIT - 1)
     assert (await limiter.check(email, ip)).refused is False, "four failures do not lock"
     await _fail(limiter, email, ip)
@@ -117,7 +105,7 @@ async def test_fifth_failure_locks_the_pair_and_the_sixth_attempt_is_refused(
 @pytest.mark.anyio
 async def test_lock_is_per_email_and_ip_pair(limiter: LoginLimiter, clock: FakeClock) -> None:
     email = _email()
-    locked_ip, other_ip = _ip(), _ip()
+    locked_ip, other_ip = new_test_ip(), new_test_ip()
     await _fail(limiter, email, locked_ip, PAIR_LIMIT)
     assert (await limiter.check(email, locked_ip)).refused is True
     clock.advance(1000)  # the account delay (1 s) applies to every IP, so wait it out first
@@ -128,7 +116,7 @@ async def test_lock_is_per_email_and_ip_pair(limiter: LoginLimiter, clock: FakeC
 async def test_refused_attempts_do_not_extend_the_lock(
     limiter: LoginLimiter, clock: FakeClock
 ) -> None:
-    email, ip = _email(), _ip()
+    email, ip = _email(), new_test_ip()
     await _fail(limiter, email, ip, PAIR_LIMIT)
     for _ in range(20):
         assert (await limiter.check(email, ip)).refused is True
@@ -143,17 +131,17 @@ async def test_progressive_delay_grows_one_two_four_seconds(
     """Five failures from five IPs (so no pair locks), then the delays are checked one by one."""
     email = _email()
     for _ in range(5):
-        await _fail(limiter, email, _ip())
-    first = await limiter.check(email, _ip())
+        await _fail(limiter, email, new_test_ip())
+    first = await limiter.check(email, new_test_ip())
     assert first.refused and first.retry_after_seconds == 1
     clock.advance(1000)
-    assert (await limiter.check(email, _ip())).refused is False
+    assert (await limiter.check(email, new_test_ip())).refused is False
 
-    await _fail(limiter, email, _ip())  # the sixth failure: delay 2 s
-    assert (await limiter.check(email, _ip())).retry_after_seconds == 2
+    await _fail(limiter, email, new_test_ip())  # the sixth failure: delay 2 s
+    assert (await limiter.check(email, new_test_ip())).retry_after_seconds == 2
     clock.advance(2000)
-    await _fail(limiter, email, _ip())  # the seventh: delay 4 s
-    assert (await limiter.check(email, _ip())).retry_after_seconds == 4
+    await _fail(limiter, email, new_test_ip())  # the seventh: delay 4 s
+    assert (await limiter.check(email, new_test_ip())).retry_after_seconds == 4
     assert account_delay_ms(7) == 4000
 
 
@@ -161,7 +149,7 @@ async def test_progressive_delay_grows_one_two_four_seconds(
 async def test_per_ip_limit_blocks_the_ip_for_the_window(
     limiter: LoginLimiter, clock: FakeClock
 ) -> None:
-    ip = _ip()
+    ip = new_test_ip()
     for _ in range(IP_LIMIT):
         await _fail(limiter, _email(), ip)
     verdict = await limiter.check(_email(), ip)
@@ -178,15 +166,15 @@ async def test_hard_lock_after_fifty_failures_and_operator_release(
     """Fifty failures across ten IPs (five each, so no pair locks), then 24 hours, then the operator unlock."""
     email = _email()
     for _ in range(10):
-        ip = _ip()
+        ip = new_test_ip()
         await _fail(limiter, email, ip, PAIR_LIMIT)
-    verdict = await limiter.check(email, _ip())
+    verdict = await limiter.check(email, new_test_ip())
     assert verdict.refused is True
     assert verdict.retry_after_seconds == 24 * 60 * 60
 
     removed = await unlock_account(cache, RATE_KEY, email, clock())
     assert removed >= 1
-    assert (await limiter.check(email, _ip())).refused is False
+    assert (await limiter.check(email, new_test_ip())).refused is False
 
 
 @pytest.mark.anyio
@@ -195,26 +183,28 @@ async def test_hard_lock_expires_after_twenty_four_hours_without_release(
 ) -> None:
     email = _email()
     for _ in range(10):
-        await _fail(limiter, email, _ip(), PAIR_LIMIT)
-    assert (await limiter.check(email, _ip())).refused is True
+        await _fail(limiter, email, new_test_ip(), PAIR_LIMIT)
+    assert (await limiter.check(email, new_test_ip())).refused is True
     clock.advance(24 * 60 * 60 * 1000)
-    assert (await limiter.check(email, _ip())).refused is False
+    assert (await limiter.check(email, new_test_ip())).refused is False
 
 
 @pytest.mark.anyio
 async def test_refresh_limit_counts_per_ip(limiter: LoginLimiter) -> None:
-    ip = _ip()
+    ip = new_test_ip()
     verdicts = [await limiter.check_refresh(ip) for _ in range(REFRESH_LIMIT + 1)]
     assert all(v.refused is False for v in verdicts[:REFRESH_LIMIT])
     assert verdicts[-1].refused is True
-    assert (await limiter.check_refresh(_ip())).refused is False, "another IP has its own budget"
+    assert (await limiter.check_refresh(new_test_ip())).refused is False, (
+        "another IP has its own budget"
+    )
 
 
 @pytest.mark.anyio
 async def test_success_clears_the_pair_and_account_counters(
     limiter: LoginLimiter, cache: Redis
 ) -> None:
-    email, ip = _email(), _ip()
+    email, ip = _email(), new_test_ip()
     await _fail(limiter, email, ip, PAIR_LIMIT - 1)
     await limiter.reset_after_success(email, ip)
     await _fail(limiter, email, ip, PAIR_LIMIT - 1)
@@ -244,7 +234,7 @@ async def test_no_raw_email_or_ip_appears_in_any_key_or_value(
 
 @pytest.mark.anyio
 async def test_every_key_has_an_expiry(limiter: LoginLimiter, cache: Redis) -> None:
-    email, ip = _email(), _ip()
+    email, ip = _email(), new_test_ip()
     await _fail(limiter, email, ip, PAIR_LIMIT)
     await limiter.check_refresh(ip)
     async for key in cache.scan_iter(match="auth:rl:*"):
@@ -261,10 +251,10 @@ async def test_valkey_down_raises_limiter_unavailable(clock: FakeClock) -> None:
     try:
         broken = LoginLimiter(dead, RATE_KEY, clock)
         with pytest.raises(LimiterUnavailable):
-            await broken.check(_email(), _ip())
+            await broken.check(_email(), new_test_ip())
         with pytest.raises(LimiterUnavailable):
-            await broken.record_failure(_email(), _ip())
+            await broken.record_failure(_email(), new_test_ip())
         with pytest.raises(LimiterUnavailable):
-            await broken.check_refresh(_ip())
+            await broken.check_refresh(new_test_ip())
     finally:
         await dead.aclose()
