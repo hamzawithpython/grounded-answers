@@ -587,3 +587,12 @@ This section is a plan. Steps 2 and 3 are not testable until the purge job is wr
 ## Deployment
 
 TBD: Add deployment instructions for production hosting.
+
+### Hosting checklist for file storage (ADR 0018)
+
+Document bytes are stored in the database (`document_blobs`), so the host must be checked for these before go-live. Record each result in SECURITY.md.
+
+1. **Storage limit.** Find the database's storage limit on the chosen host. Each file is at most 10 MiB, and the database grows with every stored version, including versions still in the retention window (ADR 0007).
+2. **Backup size and window.** Find how long the host keeps backups and how big they get. A backup holds the bytes of deleted documents until it expires (ADR 0007, SECURITY R3).
+3. **Encryption at rest.** Confirm the host encrypts the database disks. The application does not encrypt the bytes.
+4. **Scale-up trigger.** When the database storage or backup size approaches the limit, the recorded next step is a move to object storage (Backblaze B2 is the first candidate, ADR 0018). That is a new ADR.

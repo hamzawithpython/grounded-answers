@@ -227,6 +227,39 @@ class DocumentVersion(Base):
     )
 
 
+class DocumentBlob(Base):
+    """
+    The bytes of one document version (ADR 0018). Kept apart from the version row, so queries on
+    documents and versions never read the file. `content` is deferred: it is loaded only by the
+    code that needs it, which is the ObjectStore (Step 2b), never by a list or a status query.
+    """
+
+    __tablename__ = "document_blobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "version_id"],
+            [f"{SCHEMA}.document_versions.tenant_id", f"{SCHEMA}.document_versions.id"],
+            name="document_blobs_version_fk",
+            **_RESTRICT,
+        ),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(f"{SCHEMA}.tenants.id", **_RESTRICT),
+        primary_key=True,
+        nullable=False,
+    )
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, nullable=False
+    )
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_now()
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
     __table_args__ = (

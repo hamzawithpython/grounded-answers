@@ -620,3 +620,22 @@ its own schedule, and a refusal never extends it.
 A: I measured the real paths 40 times each. The slowest was 299 ms. I set 500 ms, which is about 200 ms above it. I
 recorded the numbers and the re-measurement rule in ADR 0014, because a faster or slower machine changes the answer.
 
+
+## Session 4 (Steps 1a to 2a): plain words
+
+### RLS DELETE (and UPDATE) need the row to be visible through SELECT policies
+Row-level security (RLS) filters rows with policies. A policy for each command decides which rows that command may touch.
+A DELETE or UPDATE does not skip the visibility check: PostgreSQL first has to *see* the row through a SELECT policy.
+If the SELECT policy hides the row, the DELETE matches zero rows and raises no error. Nothing fails, and the data stays.
+
+We hit this in Step 2a. The worker could read only `queued` and `processing` bytes, so its DELETE on a `purging` blob removed nothing.
+Two tests caught it. The fix widened the worker's SELECT to `purging`, the one status the purge needs. The rule is in ADR 0018 (amendment).
+
+**Q: Why did the purge DELETE silently do nothing?**
+A: A DELETE only acts on rows it can see through a SELECT policy. The worker's SELECT excluded `purging` rows, so the DELETE found none. Postgres reports "0 rows", not an error. This is why every write path must check its row count (ADR 0011).
+
+**Q: How would you test for this in CI?**
+A: Assert the row count, not just the absence of an error, and assert that the data is gone afterwards. The two failing tests did both.
+
+**Q: Why keep `ready` bytes unreadable to the worker?**
+A: Least privilege. The worker needs the bytes only while extracting text (`queued`, `processing`) and while purging (`purging`). Widening the read to `ready` would give a compromised worker every live file, so any such change must be a new migration with a reason.

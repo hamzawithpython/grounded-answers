@@ -20,6 +20,7 @@ APP_INSERT_POLICIES = frozenset(
     {
         ("app_user_documents_insert", "documents"),
         ("app_user_document_versions_insert", "document_versions"),
+        ("app_user_document_blobs_insert", "document_blobs"),
         ("app_user_audit_log_insert", "audit_log"),
         ("app_user_refresh_tokens_insert", "refresh_tokens"),
         ("app_user_password_reset_tokens_insert", "password_reset_tokens"),
