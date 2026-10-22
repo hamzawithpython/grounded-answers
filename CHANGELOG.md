@@ -22,6 +22,7 @@ Dependency and tooling changes are listed here too.
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 
 ### Added
+- Session 4, Step 1b-i: worker process (ADR 0017). `WorkerSettings` reads `WORKER_DATABASE_URL` from the environment only; the web app refuses it in a `.env` file. The worker runs as `worker_user` on the selector loop. `begin_worker_transaction` sets the tenant only. A logging filter blanks job arguments in every Procrastinate log record and keeps each job's outcome. Migration `0006` grants `worker_user` the stalled-worker prune that every worker calls at startup.
 - Session 4, Step 1a: job queue schema (migration `0005`, Procrastinate 3.10.0, MIT, pinned in `pyproject.toml`).
   The queue lives in schema `queue`, created by the bootstrap and owned by `migration_role` (ADR 0016). Grants
   are the exact list the code paths need, reviewed in `tests/db/expected_queue_grants.json`. PUBLIC has no
