@@ -13,9 +13,11 @@ The hash string carries its own parameters, so old hashes still verify after a c
 """
 
 import functools
+import secrets
 from importlib import resources
 
 from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError
 
 MIN_LENGTH = 12
 MAX_LENGTH = 256
@@ -52,3 +54,26 @@ def check_password_policy(password: str) -> None:
 def hash_password(password: str) -> str:
     """Return an Argon2id hash string (includes salt and parameters). Call the policy first."""
     return _hasher.hash(password)
+
+
+def verify_password(stored_hash: str, password: str) -> bool:
+    """
+    True only if the password matches the stored hash. A wrong password, or a stored value that
+    is not a valid hash, returns False. Nothing else is raised to the caller.
+
+    This is CPU-heavy. Call it from a worker thread in async code (auth_service.py).
+    """
+    try:
+        return _hasher.verify(stored_hash, password)
+    except (VerificationError, InvalidHashError):
+        return False
+
+
+def make_dummy_hash() -> str:
+    """
+    A hash of a random value, with the same parameters as real hashes (ADR 0004).
+
+    Unknown emails are verified against this hash, so they cost the same as a wrong password.
+    The hash is created once at startup, and its plaintext is discarded.
+    """
+    return _hasher.hash(secrets.token_urlsafe(32))

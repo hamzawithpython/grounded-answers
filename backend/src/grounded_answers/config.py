@@ -2,7 +2,7 @@ import functools
 from pathlib import Path
 from typing import Literal
 
-from pydantic import PostgresDsn, RedisDsn
+from pydantic import PostgresDsn, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # Dev host is 127.0.0.1 everywhere (see ADR 0004). localhost is a different
     # host from 127.0.0.1, so cookies set by one are not sent to the other.
     cors_origins: str = "http://127.0.0.1:3000"
+    # Auth (ADR 0004). The key file holds Ed25519 private keys; it lives outside the repo and is
+    # read only by the API process. AUTH_JWT_ACTIVE_KID, if set, must match the file's "active".
+    auth_jwt_keys_file: Path | None = None
+    auth_jwt_active_kid: str | None = None
+    # Keys the HMAC'd client IP in the audit log (ADR 0004). Required at startup, never logged.
+    auth_log_hmac_key: SecretStr | None = None
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",

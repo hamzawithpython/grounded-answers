@@ -22,6 +22,8 @@ dist/
 .env
 .env.*
 !.env.example
+# JWT signing keys (ADR 0004). The real file lives outside the repo; this is a second guard.
+*jwt-keys*.json
 
 # IDE
 .vscode/

@@ -248,7 +248,8 @@ class AuditLog(Base):
     target_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     ip_hmac: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # none_as_null: Python None is stored as SQL NULL, not as the JSON value null.
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=_now()
     )
