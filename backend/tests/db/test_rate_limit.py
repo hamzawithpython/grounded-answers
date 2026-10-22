@@ -4,7 +4,9 @@ a fake clock, so nothing sleeps and no test depends on another.
 """
 
 import asyncio
+import ipaddress
 import secrets
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -19,11 +21,20 @@ from grounded_answers.rate_limit import (
     account_delay_ms,
     unlock_account,
 )
-from tests.db.auth_support import VALKEY_TEST_URL
+from tests.db.auth_support import VALKEY_TEST_URL, flush_test_valkey
 
 pytestmark = pytest.mark.db
 
 RATE_KEY = secrets.token_bytes(48)
+
+
+@pytest.fixture(autouse=True)
+def fresh_valkey() -> Iterator[None]:
+    """Empty the limiter's Valkey database before each test. Counters live 10 real minutes, and
+    the fake clock sits in one fixed window, so without this a test sees earlier tests' failures
+    and earlier runs' failures."""
+    flush_test_valkey()
+    yield
 
 
 class FakeClock:
@@ -58,8 +69,15 @@ def _email() -> str:
     return f"user-{secrets.token_hex(6)}@limits.test"
 
 
+_BENCHMARK_NET = ipaddress.IPv4Network("198.18.0.0/15")  # RFC 2544 benchmarking, 131,072 addresses
+
+
 def _ip() -> str:
-    return f"198.51.100.{secrets.randbelow(250) + 1}"
+    # A large range, not 250 addresses: with 250, a test's random check IP matched one of its own
+    # failure IPs about 4% of the time, and the pair lock refused it. The benchmarking range is
+    # used because random full-IPv4 addresses include loopback, private and broadcast space,
+    # which trusted-proxy logic may treat differently later.
+    return str(_BENCHMARK_NET[secrets.randbelow(_BENCHMARK_NET.num_addresses)])
 
 
 async def _fail(limiter: LoginLimiter, email: str, ip: str, times: int = 1) -> None:
