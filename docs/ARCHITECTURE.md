@@ -400,6 +400,16 @@ Chunks inherit this rule once they exist (section 6).
 
 - `DOCUMENT_RETENTION_DAYS`: integer, default `30`, range `1–365`. Validated in `Settings` at startup. Added to `.env.example` in Session 2, Step 4.
 
+## 5.9 Text extraction (Session 4, Step 4, ADR 0020)
+
+The worker reads a version's bytes (`ObjectStore`, ADR 0018) and extracts text in a child process:
+
+- The parent starts `python -I -m grounded_answers.extract.child KIND [limit]`, and writes the bytes to its stdin. The child returns one JSON object on stdout. Nothing is written to disk.
+- Limits: a timeout per format (PDF 30 s, DOCX 10 s, Markdown and text 5 s), 50 MiB of output, and on Linux a 1 GiB address-space limit set in the child before the parsers load. The parent kills the whole process tree on a limit.
+- Libraries: pypdf (PDF), python-docx (DOCX, entities not resolved), markdown-it-py (Markdown and text).
+- Output is one structure for every format: `Extracted` with `Section`s (number, heading, level, page, text) and `Table`s. Section numbers set the level; font size sets it for unnumbered PDF headings.
+- Failures are one of four reasons: `timeout`, `memory`, `unreadable`, `no_text`. Nothing from the child's stderr or stdout reaches a log or a reason.
+
 ## 6. Chunks and embeddings (deferred)
 
 **Not created in Session 2.** The embedding vector dimension depends on the embedding model decision, which is made in Session 3 or 4 (SPEC open decision #4). Creating the table earlier would hard-code a dimension we may change.

@@ -29,7 +29,10 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 | 2a | File storage decided (ADR 0018: bytes in PostgreSQL, B2 as the scale-up path). Migration 0007: `document_blobs`, grants, policies, checks, model, tests | 🟡 Built on `feat/document-storage-2`. Not committed. Full gates pending. |
 | 2b | `ObjectStore`, `PostgresObjectStore` (caller's tenant transaction), in-memory fake, contract test, rowcount allowed set (ADR 0018, amendment 2) | 🟡 Built on `feat/object-store-2b`. Not committed. Unit and contract tests pass; full gates pending. |
 | 3 | Upload endpoint `POST /documents` (ADR 0019): tenant_admin, streaming 10 MiB cap, type from bytes, sanitised filename, duplicates (live only), one transaction with the outbox job, rate limits. Off until Step 6 (`UPLOAD_ENABLED=false`). | 🟡 Built on `feat/upload-endpoint-3`. Not committed. Full gates pending. |
-| 4 to 8 | Extraction decision, chunks and embeddings, ingestion worker, replace/delete/purge, end-to-end with `demo-data/` | Not started |
+| 4 | Text extraction (ADR 0020): pypdf, python-docx, markdown-it-py in a child process with timeouts and a Linux memory limit; DOCX XXE and billion-laughs tested; no-text PDFs refused (SPEC §6.1 limitation, awaiting approval of the wording) | 🟡 Built on `feat/extraction-4`. Not committed. Linux container run: 45 passed, demo set under 1 GiB. |
+| 5 to 8 | Embedding decision and chunks table, ingestion worker, replace/delete/purge, end-to-end with `demo-data/` | Not started |
+
+**Known limits to revisit with evidence (ADR 0020):** PDF tables are text in v1 (D-A). If Session 5 PDF table questions fail, pdfplumber is the first candidate. PDF heading levels use font size only for unnumbered headings. Windows development has no memory limit (SECURITY R19).
 
 **For Step 4 (PDF extraction): the worker needs size and time limits on PDF parsing.** A PDF can carry streams that expand far beyond their size on disk (decompression bombs). Step 4 must cap the decompressed size, the page count and the parse time, and run the parser under those limits, before any text is kept (SPEC §6.1, ADR 0019 D3). The upload only checks the magic bytes.
 
