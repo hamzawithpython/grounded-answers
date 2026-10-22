@@ -97,7 +97,7 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 | T21 | Secrets committed to git | `.env` git-ignored; gitleaks in CI; test-only secrets marked as such | Built | CI `security` job |
 | T22 | Dependency with a known vulnerability | Dependabot with a 7-day cooldown; `pip-audit` in CI; `npm audit` | Built | CI jobs `backend`, `frontend`, `security` |
 | T23 | Cross-site request forgery on refresh | Refresh cookie is httpOnly, SameSite and exact-origin CORS; `Origin` checks (ADR 0004 cookie design) | Designed (ADR 0004) | No endpoints yet |
-| T24 | Unauthorised change to `main` | Repo is public; `main` requires 1 approving review, 4 status checks (`backend`, `backend-db`, `frontend`, `security`), strict up-to-date checks, admins enforced, no force pushes or deletions | Built (verified 2026-10-22 via the branch protection API) | RUNBOOK, "Branch protection" (the verify command) |
+| T24 | Unauthorised change to `main` | Repo is public; `main` requires 4 status checks (`backend`, `backend-db`, `frontend`, `security`), strict up-to-date checks, admins enforced, no force pushes or deletions. Required approvals are 0 (solo maintainer; see R7). | Built (verified via the branch protection API) | RUNBOOK, "Branch protection" (the verify command) |
 
 ---
 
@@ -155,7 +155,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R4 | No legal hold: a document under hold cannot outlive its purge date | ADR 0007 | None in v1 | New ADR if needed |
 | R5 | A compromised worker can delete stored files | ADR 0007 | Worker has no identity or token access | Storage credentials scoped to `tenant/` prefixes |
 | R6 | `/ready` is public and reveals which dependency is down | ADR 0009 | Names only; no hosts, versions or messages | Accepted |
-| R7 | A single maintainer can approve only with a second account, so the author of a PR cannot merge it alone. Admins are enforced, so there is no bypass. | Process | Required review and checks; the owner needs a second reviewer or a rule change | Decide: add a second reviewer account, or set the required review count to 0 and keep the checks |
+| R7 | No second reviewer. Required approvals are 0, so one maintainer can merge a PR after its checks pass. A compromised maintainer account could push code that passes CI. | Process | Four required checks; admins enforced; no force pushes | Add a second reviewer and set required approvals back to 1 when a second maintainer joins |
 | R8 | Pooled-connection leak test and `lazy="raise"` test not written | ADR 0005 | Designed controls; no tenant endpoints exist yet | Write both with the first tenant endpoint and the first model |
 | R9 | Rowcount checks in app write paths are not built | PROGRESS carry-over | Worker transition tests assert 0-row behaviour | Build with the first app UPDATE or DELETE (Session 3) |
 
@@ -183,7 +183,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 - [ ] Braces vulnerability patched or replaced
 - [ ] Rate limiting deployed
 - [ ] Audit logging tested end-to-end
-- [x] Branch protection on `main` in effect (T24; verified 2026-10-22). Reviewer rule open (R7)
+- [x] Branch protection on `main` in effect (T24; verified 2026-10-22). Required approvals 0 by choice for a solo maintainer (R7)
 - [ ] Backup retention window recorded and restore procedure written (R3)
 - [ ] TLS/HTTPS enforced
 - [ ] Secrets manager (AWS Secrets, Vault, or similar) deployed

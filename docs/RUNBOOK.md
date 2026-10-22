@@ -405,9 +405,9 @@ In effect since 2026-10-22. The repo is public. Verify it with:
 gh api repos/hamzawithpython/grounded-answers/branches/main/protection --jq '{checks: .required_status_checks.contexts, reviews: .required_pull_request_reviews.required_approving_review_count, enforce_admins: .enforce_admins.enabled, force_push: .allow_force_pushes.enabled, deletions: .allow_deletions.enabled}'
 ```
 
-Expected: `checks` is `["backend","backend-db","frontend","security"]`, `reviews` is `1`, `enforce_admins` is `true`, `force_push` and `deletions` are `false`.
+Expected: `checks` is `["backend","backend-db","frontend","security"]`, `reviews` is `0`, `enforce_admins` is `true`, `force_push` and `deletions` are `false`.
 
-A PR's author cannot approve it. A second reviewer account is needed to merge, or the required review count must be changed (see SECURITY.md, R7). If the rule changes, update this section and the SECURITY.md checklist.
+The four required checks are the merge gate. Required approvals are `0` because this is a solo project: a PR's author cannot approve their own PR, so a required review would block every merge. Admins are enforced, so no one bypasses the checks. If a second maintainer joins, set the required approvals back to 1 and update this section and SECURITY.md (R7).
 
 ## Restore after a backup (planned with the purge job, Session 3)
 

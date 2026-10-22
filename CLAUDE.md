@@ -47,6 +47,9 @@ Read `docs/SPEC.md` and `docs/PROGRESS.md` at the start of every session.
 ## Migrations (hard rule)
 - Once a migration has been applied to any persistent database (dev or prod), never edit it. Create a new migration instead. Edits are allowed only for migrations that exist solely in ephemeral test databases.
 
+## Git (hard rule)
+- Before every commit, run `git branch --show-current`. Never commit on `main`; if on `main`, create a branch first.
+
 ## Usage efficiency (my Claude usage is limited)
 - Keep explanations clear but concise. No repeating content I already have.
 - Read only the files needed for the current step.
