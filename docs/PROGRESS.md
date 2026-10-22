@@ -1,8 +1,40 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 3, Step 3c built on `feat/auth-rate-limits`, awaiting review; not committed)
+**Last updated:** 2026-10-22 (Session 3 complete; Session 4 starts with migration 0005)
 
-## Session 2 status at a glance
+## Session 3 complete (2026-10-22)
+
+| Step | Work | State | PR |
+|---|---|---|---|
+| 1 | Admin CLI: tenants, domains, first admin, unlock (ADR 0010) | ✅ Merged | #16 |
+| 2 | ORM models, tenant transaction helper, R8 tests, rowcount check (ADR 0011) | ✅ Merged | #17 |
+| 3a | Keys, login, per-request checks (ADR 0012) | ✅ Merged | #18 |
+| 3b | Refresh rotation, reuse, logout (ADR 0013) | ✅ Merged | #19 |
+| 3c | Login limits in Valkey, timing floor (ADR 0014) | ✅ Merged | #20 |
+| 4 | Background job runner decision: Procrastinate (ADR 0015) | 🟡 PR #21, awaiting merge | #21 |
+
+Open from Session 3: the `icacls` and HMAC key steps on your machine (RUNBOOK, Auth keys), and the Step 8 docs
+from Session 2 (SECURITY, RUNBOOK, LEARNING_LOG, CHANGELOG). The R9 rowcount check is in place for the first app
+UPDATE or DELETE.
+
+## Session 4 plan
+
+1. **Migration 0005:** Procrastinate 3.10.0's schema, grants for `app_user` and `worker_user`, and the catalog
+   guard entries (ADR 0015, decisions 1 and 2). The exact grant list comes from the function bodies. Upgrades are
+   new migrations.
+2. **Upload and ingestion:** upload endpoint (size and type checked from content, ADR 0007, SPEC §6.1), ingestion
+   job with ids-only arguments, an idempotency test, and the tenant-mismatch test (ADR 0015, decision 9).
+3. **Purge job** (ADR 0007): periodic task, idempotent steps, `DOCUMENT_RETENTION_DAYS` setting.
+4. **Periodic cleanup** of finished jobs with `remove_old_jobs` (ADR 0015, decision 5).
+5. **Host selection:** pooler mode (LISTEN/NOTIFY, ADR 0015 decision 6) and the connection budget (decision 7).
+
+## Later improvements (not yet scheduled)
+
+- **Separate `valkey-test` service in the test profile.** The test Valkey shares the dev Valkey container, on
+  database 15, and the test fixture flushes that database. Postgres already has a separate `postgres-test`
+  service on port 5433. Mirror that for Valkey, so tests never touch the dev instance's data (ADR 0006 pattern).
+
+## Session 2 status at a glance (historical)
 
 | Step | Work | State | Where |
 |---|---|---|---|
@@ -64,12 +96,6 @@ Uploads need authentication, so Session 3 builds auth first. Ingestion and the p
 
 Each step has its own branch and stops for review. Nothing is committed on `main`.
 
-## Later improvements (not yet scheduled)
-
-- **Separate `valkey-test` service in the test profile.** The test Valkey now shares the dev Valkey container, on
-  database 15, and the test fixture flushes that database. Postgres already has a separate `postgres-test`
-  service on port 5433. Mirror that for Valkey, so tests never touch the dev instance's data (ADR 0006 pattern).
-
 ## Session 3 carry-over: check rowcount on every RLS-filtered write
 
 - An UPDATE or DELETE that RLS filters out affects **0 rows and raises no error**. Only a `WITH CHECK` violation raises (`InsufficientPrivilege`, "row-level security").
@@ -79,9 +105,9 @@ Each step has its own branch and stops for review. Nothing is committed on `main
 
 ## Next session starts here
 
-1. Step 8 docs: SECURITY.md, RUNBOOK (`/ready`, rollback, branch protection applied), LEARNING_LOG, CHANGELOG (Step 7 entries added).
-2. Local `backend/.env`: `DATABASE_URL` as `app_user` only. `MIGRATION_DATABASE_URL` goes in the shell, never in `.env` (ADR 0004; `.env.example` and CHANGELOG say so). Dev database needs the operator bootstrap and `alembic upgrade head` (applies 0004) before `/ready` returns 200 and before the admin CLI runs.
-3. Session 3, Step 3c: login protection in Valkey, timing floor (setting `AUTH_LOGIN_FLOOR_MS`, default 500, with an overrun warning), unlock-account (ADR 0014). Built on `feat/auth-rate-limits`, awaiting review; not committed. Closes R11 and R14. Open for you: add `AUTH_RATE_LIMIT_HMAC_KEY` to `backend\.env` (the API will not start without it). Then the next step.
+1. Session 4, migration 0005: Procrastinate's schema and grants (see Session 4 plan above).
+2. Then upload and ingestion, the purge job, and periodic cleanup.
+3. Before Session 4 ends: finish the Session 2 Step 8 docs and the `icacls` step on your machine.
 
 ## Completed before Session 2
 
