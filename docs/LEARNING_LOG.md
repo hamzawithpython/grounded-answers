@@ -224,3 +224,185 @@ docs/           # Documentation
 10. **Not all vulnerabilities are equal.** npm audit: separate prod deps (blocking gate) from dev-only (non-blocking visibility). Context matters.
 11. **Dependency automation needs guardrails.** Dependabot: group minor/patch (non-breaking), keep major updates separate, ignore version-pinned deps (e.g., @types/node per Node runtime).
 12. **Document your security decisions.** SECURITY.md records vulnerabilities, mitigations, and review dates. Allowlists are not "ignoring" the problem; they're explicit trade-offs.
+
+---
+
+# Learning Log — Session 2 (2026-10-22)
+
+## Overview
+Built the data layer for multi-tenancy and the `/ready` endpoint. The main lesson: the database enforces tenant isolation, so a bug in the app cannot leak data by itself. Every control below is backed by a test that fails if the control is removed.
+
+**Merged or open:** PR #8 (ESLint), #9 (auth design, ADR 0004), #10 (DB access, ADR 0005), #12 (schema, roles, RLS, migrations 0001–0003), #13 (`/ready`, ADR 0008 and 0009, test cluster, operator scripts, docs).
+
+## Key Decisions & Rationale
+
+### 1. Authentication: self-built JWT (ADR 0004)
+- **Decision:** FastAPI verifies its own EdDSA tokens. No managed auth service.
+- **Why:** Tenant context has to reach the database session. A third-party token format would need an extra mapping step on every request.
+- **Trade-off:** we own the security. That is why ADR 0004 is long and has an amendment for each gap found.
+
+### 2. Database access: async SQLAlchemy 2.1 + psycopg 3 + Alembic (ADR 0005)
+- **Decision:** async, with explicit SQL for every security object.
+- **Why:** streaming answers need async I/O. Alembic autogenerate cannot see policies, functions or grants, so those are written and tested by hand.
+
+### 3. Test strategy: a real PostgreSQL per session (ADR 0006)
+- **Decision:** a fresh `grounded_answers_test` database per run, with real login roles and random passwords. Tests fail rather than skip when the database is missing.
+- **Why:** a test that skips when the database is down looks green in CI. A test that uses the superuser proves nothing about what the app can do.
+
+### 4. Document lifecycle: soft delete, then purge (ADR 0007)
+- **Decision:** delete retires content at once; a worker purges it after `DOCUMENT_RETENTION_DAYS`.
+- **Limit (stated, not hidden):** backups keep deleted content until the provider's backup window ends. See SECURITY.md R3.
+
+### 5. Valkey client: redis-py 8.1.0 (ADR 0008)
+- **Decision:** redis-py, not valkey-py. Both are MIT. redis-py had more frequent releases in 2026, and ADR 0003 keeps the app code generic.
+
+### 6. Readiness: checks, timeouts, cache (ADR 0009)
+- **Decision:** three real checks, a 1 s timeout each, a 2 s budget, a 2 s result cache, and a public 503 that names only the failed dependency.
+
+---
+
+## Technical Concepts Learned
+
+### Row-Level Security (RLS)
+- **What:** PostgreSQL filters rows per query by a policy. The filter is a predicate on the table, so it applies to every query, however the app builds it.
+- **How we use it:** each tenant table has policies that compare `tenant_id` with `current_setting('app.current_tenant', true)`. `USING` decides which rows a SELECT, UPDATE or DELETE can see. `WITH CHECK` decides which new rows an INSERT or UPDATE may write.
+- **The silent case:** an UPDATE or DELETE that RLS filters out affects **0 rows and raises no error**. Only a `WITH CHECK` violation raises. So the app must check rowcount on every write (PROGRESS carry-over; tested in `test_worker_policies.py`).
+
+**Interview Q&A**
+- **Q: What does RLS protect against that a `WHERE tenant_id = ?` in the app does not?**
+  A: A forgotten `WHERE` clause, a new query written by someone who did not know the rule, or a bug in a query builder. The database applies the predicate to every statement the role runs.
+- **Q: What is the difference between `USING` and `WITH CHECK`?**
+  A: `USING` filters which existing rows are visible to SELECT, UPDATE and DELETE. `WITH CHECK` validates rows being written (INSERT, and the new version of an UPDATE).
+- **Q: Why does an UPDATE that RLS blocks not error?**
+  A: From the database's point of view, the row is simply not visible. Only a write that would produce a row the policy rejects raises an error. The app must treat `rowcount == 0` as a failure.
+
+### FORCE ROW LEVEL SECURITY
+- **What:** by default, the table owner bypasses RLS. `FORCE` removes that exemption for the owner.
+- **Why it matters here:** `migration_role` owns the tables. Without `FORCE`, a migration bug or a compromised migration login would see every tenant's rows.
+- **Where it is tested:** `test_catalog.py` checks `relrowsecurity` and `relforcerowsecurity` on every table. `alembic_version` is the one documented exception: Alembic writes to it, and it holds no tenant data.
+- **Also:** superusers and roles with `BYPASSRLS` ignore RLS entirely. `test_catalog.py` checks that no login role has either attribute.
+
+**Interview Q&A**
+- **Q: A table has RLS enabled. Who can still see every row?**
+  A: The table owner (unless `FORCE` is set), superusers, and roles with `BYPASSRLS`.
+- **Q: Why is the migration role, which owns the tables, not an exception?**
+  A: Because it runs migrations, not the app. We force RLS so even a compromised migration login sees only what its policies allow. Migrations that need to bypass RLS would be a separate, reviewed step.
+
+### `set_config` versus `SET`
+- **`SET app.current_tenant = ...`** changes the setting for the whole session. A pooled connection keeps the session, so the next request that receives this connection inherits the tenant.
+- **`SELECT set_config('app.current_tenant', :tid, true)`** sets it for the current transaction only. The third argument `true` ends the setting at COMMIT or ROLLBACK.
+- **`SET` cannot take bind parameters.** `set_config` is a function, so the tenant ID is a bound parameter, not interpolated into SQL.
+- **Fail closed:** `current_setting(name, true)` returns NULL when the setting is missing. The policies compare against NULL, so nothing matches.
+
+**Interview Q&A**
+- **Q: Why not `SET LOCAL`?**
+  A: `SET LOCAL` also ends at the transaction, but it is a statement, not a function, so it cannot take a bound parameter. Using `set_config` avoids string building.
+- **Q: What exactly leaks between requests with plain `SET`?**
+  A: The connection pool returns the same server session to the next client. The setting from the last request is still there, so a request that forgets to set its own tenant runs as the previous tenant.
+- **Q: Our tenant helper is not written yet. Why is that not a gap in the design?**
+  A: It is designed and recorded (ADR 0005), and the leak test is required before the first tenant endpoint (R8). Until then no code path uses tenant data.
+
+### SECURITY DEFINER hardening
+- **What:** a function runs with the privileges of its owner, not the caller. That lets a narrow operation (for example, checking a login) run without granting the caller a broad privilege.
+- **The risks and our controls:**
+  1. **Search path hijack.** If the caller can create an object with the same name in a schema earlier in its search path, the definer runs that object. Control: `SET search_path = pg_catalog, grounded` on every definer function.
+  2. **Unqualified names.** Control: every table and function referenced by its schema name.
+  3. **PUBLIC execute.** PostgreSQL grants `EXECUTE` on functions to PUBLIC by default. Control: `REVOKE ALL ... FROM PUBLIC`, then a grant to the one role that needs it.
+  4. **Owner can log in.** Control: the owner roles (`auth_definer`, `retention_definer`, `provisioning_definer`) are `NOLOGIN`, `NOBYPASSRLS`, `NOSUPERUSER`. `test_catalog.py` checks each.
+  5. **Too many columns.** Control: each function returns only what its caller needs (for example, `retention_due_tenant_ids()` returns tenant IDs only).
+- **Tested by:** `test_catalog.py` (`test_security_definer_functions_pin_search_path_and_are_not_public` and the exact grants list).
+
+**Interview Q&A**
+- **Q: Why does the search path matter for a definer function?**
+  A: The function runs with the owner's rights, but name lookup uses the caller's search path. Without a pinned path, a caller can shadow a table or function and make the definer run the caller's code with the owner's rights.
+- **Q: Why is the owner role `NOLOGIN`?**
+  A: No one can connect as it, so there is no password to steal and no session to misuse. It only runs functions.
+
+### SCRAM-SHA-256 verifiers
+- **What:** PostgreSQL stores a password as a verifier: iterations, salt, a StoredKey and a ServerKey, all derived with PBKDF2. The server checks a login by challenge and response, and never receives the plaintext.
+- **Why we compute it client-side:** `ALTER ROLE ... PASSWORD` with a plaintext sends the plaintext over the connection and can write it to the server log. We compute the verifier with libpq (`PQencryptPasswordConn`, exposed as `PGconn.encrypt_password`), then send only the verifier.
+- **Our rules:** passwords are at least 16 ASCII characters (ASCII because PowerShell can change non-ASCII bytes on the way). Test verifiers are random per session. A verifier is still a secret: it is not printed, and it is redacted from `psql` error output.
+- **Tested by:** `test_verifier.py` (format and input rules), `test_login.py` (the password whose verifier was set logs in, and the wrong one does not).
+
+**Interview Q&A**
+- **Q: Why is a SCRAM verifier safer than a hash of the password?**
+  A: It is derived with a salt and a high iteration count, and the server never needs the password. Someone who steals the verifier still has to run PBKDF2 on each guess, and the login protocol cannot be replayed.
+- **Q: Why compute the verifier on the client?**
+  A: To keep the plaintext out of the connection and the server log. The server only stores what it receives.
+
+### Composite foreign keys
+- **What:** a foreign key over two columns, for example `(tenant_id, document_id) REFERENCES documents (tenant_id, id)`.
+- **Why:** the referenced side needs a unique key on `(tenant_id, id)`. Then a row in tenant A cannot point at a row in tenant B, even if the app passes the wrong ID. The database refuses it.
+- **ON DELETE RESTRICT everywhere:** a parent with children cannot be deleted, so no cascade can remove rows that the audit trail or the purge job still needs. The purge job deletes children first (ADR 0007).
+- **Where:** `0001_tables.py`, every foreign key.
+
+**Interview Q&A**
+- **Q: What does a composite foreign key prevent that a single-column one does not?**
+  A: A reference across tenants. A single-column key only checks that the ID exists, not that it belongs to the same tenant.
+- **Q: Why `RESTRICT` and not `CASCADE`?**
+  A: A cascade removes rows silently. Here, deleting a document must be an explicit, audited step, and the purge job controls the order.
+
+### The silent REVOKE
+- **What:** `REVOKE ALL ON TABLE t FROM role` does **not** remove column-level grants. Column privileges are stored separately from table privileges, so they stay.
+- **Also:** revoking a privilege the role does not hold produces a **WARNING**, not an error. A migration that ignores warnings passes, and nothing changed.
+- **Our fix:** the downgrade in `0002_roles_and_grants.py` names the columns explicitly. The catalog test (`test_grants_on_grounded_match_expected_list`) compares the whole grants list with `expected_grants.json`, so a leftover grant fails CI.
+
+**Interview Q&A**
+- **Q: You ran `REVOKE ALL ON users FROM app_user`. Can app_user still read a column?**
+  A: Yes, if it had a column-level grant. Table-level REVOKE does not remove column grants. Revoke the columns by name too.
+- **Q: How would you catch a grant that a migration forgot to remove?**
+  A: A test that lists every grant from the catalog and compares it with an expected list, so any change needs a reviewed edit.
+
+### Liveness vs readiness (Session 2 detail)
+- **Liveness (`/health`):** the process is running. It checks nothing else. A failing liveness probe restarts the container.
+- **Readiness (`/ready`):** the app can serve requests. It checks the database as `app_user`, Valkey, and the schema head. A failing readiness probe removes the instance from the load balancer, but does not restart it. A restart would not fix a database outage.
+- **Design details (ADR 0009):** each check has a timeout; the checks run concurrently under a shared budget; the result is cached briefly, so a public endpoint does not open a connection per request; the public response names only the failed dependency.
+
+**Interview Q&A**
+- **Q: Why is a database outage a readiness failure and not a liveness failure?**
+  A: Restarting the app does not fix the database. A liveness failure would restart every instance in a loop. Readiness removes the instances from traffic until the database returns.
+- **Q: Why cache a readiness result?**
+  A: The endpoint is public and the load balancer polls it. Without a cache, each poll opens database connections, and a slow database gets slower.
+- **Q: Why not name the failing host in the 503?**
+  A: The endpoint is public. A hostname or error message tells an attacker about the internal network. The log holds the detail.
+
+### Migrations as explicit SQL
+- **What:** each migration runs SQL we wrote, not SQL that Alembic generated from models.
+- **Why:** autogenerate does not see RLS policies, definer functions or grants. A migration that the tests cannot read is a migration nobody reviews.
+- **Rule:** an applied migration is never edited. A fix is a new migration (CLAUDE.md). Migration 0004 is the example: it grants one read to `app_user` on the schema version.
+
+---
+
+## Problems Encountered & Solutions
+
+### 1. Dev passwords overwritten by the test fixture
+- **Symptom:** after a DB test run, the dev `app_user` and `migration_role` passwords no longer worked.
+- **Cause:** the test fixture runs `ALTER ROLE ... PASSWORD` on whatever cluster the admin URL points at, every session. The admin URL pointed at the dev cluster.
+- **Fix:** a separate test cluster on port 5433 with its own volume and credentials, and a guard that refuses an admin URL on the dev host and port (`test_guard.py`).
+- **Lesson:** a test that changes shared state is a deployment risk. Give tests their own state, and make the wrong target impossible, not just unlikely.
+
+### 2. `MIGRATION_DATABASE_URL` in the web app's env file
+- **Symptom:** `migration_database_url: Extra inputs are not permitted` at startup.
+- **Cause:** the example file listed a migration credential. The app loads that file, and `Settings` forbids unknown keys.
+- **Fix:** removed. Migration credentials are set in the shell only. `test_env_example.py` now fails CI if the example and `Settings` disagree.
+- **Lesson:** a security rule ("migration credentials never reach the web app") should have a test. This one now does.
+
+### 3. Silent variable not forwarded into a container
+- **Symptom:** `ROLE_SCRAM is not set` from `psql`, even though PowerShell had set it.
+- **Cause:** `docker compose exec -e NAME` forwards only the names it lists.
+- **Fix:** name every variable the SQL reads, in `PSQL_COMMAND`, the RUNBOOK and `ci.yml`.
+
+### 4. The schema check and an empty database
+- **Symptom:** `/ready` returned 503 `schema` on a fresh database.
+- **Cause:** `grounded.alembic_version` did not exist. The log showed `ProgrammingError`.
+- **Fix:** none needed: the check was correct. It reports "not ready" until the migrations run. The RUNBOOK troubleshooting entry explains it.
+
+---
+
+## Key Takeaways for Session 3
+
+1. Every write path checks rowcount, and treats 0 rows as a failure.
+2. The tenant helper (`set_config`, transaction-scoped) and the pooled-connection leak test come with the first tenant endpoint (R8).
+3. `lazy="raise"` is set with the first ORM model, with its test.
+4. The purge job needs the restore procedure in the RUNBOOK before it runs in production.
+5. Before any test writes to a database, ask: which cluster does this URL point at?
