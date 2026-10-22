@@ -30,15 +30,29 @@ def database_name(url: str) -> str:
     return urlsplit(url).path.lstrip("/")
 
 
+def endpoint(url: str) -> tuple[str, int | None]:
+    """
+    Host and port of a URL, with localhost and 127.0.0.1 treated as one host.
+
+    Both names reach the same loopback server, so a dev URL written with one name must still
+    match an admin URL written with the other.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    return ("127.0.0.1" if host == "localhost" else host, parts.port)
+
+
 def check_targets(admin_url: str, dev_urls: Iterable[str] = ()) -> None:
     """
     Refuse unsafe targets. Returns normally only when every check passes.
 
-    Checks (ADR 0006, section 3):
+    Checks (ADR 0006, section 3; ADR 0006 amendment for the separate test cluster):
       1. The admin URL connects to the maintenance database, not to a dev or test database.
       2. No dev URL is reused as the admin URL.
-      3. No dev URL names the test database (a dev URL must never point at the test target).
-      4. The test target name is exactly TEST_DB_NAME and ends in '_test'.
+      3. The admin URL is not on the same host and port as a dev URL. The test cluster runs on
+         its own port (5433), so a test run cannot reach the dev cluster's roles.
+      4. No dev URL names the test database (a dev URL must never point at the test target).
+      5. The test target name is exactly TEST_DB_NAME and ends in '_test'.
     """
     if not (TEST_DB_NAME == "grounded_answers_test" and TEST_DB_NAME.endswith("_test")):
         raise GuardError("guard: TEST_DB_NAME must be 'grounded_answers_test'")
@@ -53,6 +67,11 @@ def check_targets(admin_url: str, dev_urls: Iterable[str] = ()) -> None:
     for dev_url in dev_urls:
         if dev_url == admin_url:
             raise GuardError("guard: TEST_ADMIN_DATABASE_URL is the same as a dev URL")
+        if endpoint(dev_url) == endpoint(admin_url):
+            raise GuardError(
+                "guard: TEST_ADMIN_DATABASE_URL has the same host and port as a dev URL "
+                "(use the test cluster on port 5433, docs/RUNBOOK.md)"
+            )
         if database_name(dev_url) == TEST_DB_NAME:
             raise GuardError(f"guard: a dev URL names the test database '{TEST_DB_NAME}'")
 

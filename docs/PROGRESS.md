@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 2, in progress: Steps 1–6 done, Steps 7–8 pending)
+**Last updated:** 2026-10-22 (Session 2, in progress: Steps 1–7 built on `feat/ready-endpoint`, awaiting review; Step 8 pending)
 
 ## Session 2 status at a glance
 
@@ -14,7 +14,7 @@
 | 4 | Roles and migrations (0001 tables, 0002 grants) | ✅ | PR #12 |
 | 5 | RLS policies, definer functions, `create_tenant_user` (0003) | ✅ | PR #12, commit `b2192d0` (CI green) |
 | 6 | Proof by tests | 🟡 Mostly done (see below) | working tree |
-| 7 | `/ready` endpoint | ⬜ Not started | — |
+| 7 | `/ready` endpoint (redis-py 8.1.0, ADR 0008; checks and cache, ADR 0009; migration 0004) | 🟡 Built, awaiting review and commit | `feat/ready-endpoint` |
 | 8 | Docs: SECURITY.md, RUNBOOK, LEARNING_LOG, CHANGELOG | 🟡 Partly done | — |
 
 ## Step 6: what the tests prove (DB suite: 83 passing, 0 skipped)
@@ -60,8 +60,10 @@ Unit suite: 38 passing. Both suites run in CI (`backend` with `-m "not db"`, `ba
 ## Next session starts here
 
 1. Commit and merge the worker and trigger tests and this file (after approval).
-2. Step 7: `/ready` (PostgreSQL and Valkey, short timeouts, 503 with the failed dependency, healthy and failed tests).
-3. Step 8: SECURITY.md, RUNBOOK, LEARNING_LOG, CHANGELOG.
+2. Review Step 7 on `feat/ready-endpoint` (unit 52 passing, DB 87 passing, lint, format and mypy clean). Then commit (Conventional Commits) after approval.
+   - Local dev: the dev database has no `grounded` schema yet, so `/ready` returns 503 `schema`. Follow the RUNBOOK operator bootstrap, then `alembic upgrade head` (applies 0004).
+   - Local `backend/.env`: `DATABASE_URL` as `app_user`, and add `MIGRATION_DATABASE_URL` as `migration_role`.
+3. Step 8: SECURITY.md, RUNBOOK (`/ready`, rollback, branch protection applied), LEARNING_LOG, CHANGELOG (Step 7 entries added).
 4. Then Session 3: retrieval and ingestion, starting with the document upload path and the purge job (with `DOCUMENT_RETENTION_DAYS`).
 
 ## Completed before Session 2

@@ -1,4 +1,5 @@
 [
+  "app_user|column:alembic_version.version_num|SELECT",
   "app_user|column:document_versions.failure_reason|UPDATE",
   "app_user|column:document_versions.purge_after|UPDATE",
   "app_user|column:document_versions.retired_at|UPDATE",

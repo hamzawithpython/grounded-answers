@@ -10,9 +10,11 @@ from .guard import (
     check_scratch_database,
     check_targets,
     database_name,
+    endpoint,
 )
 
-ADMIN_OK = "postgresql://postgres:admin-secret@127.0.0.1:5432/postgres"
+# The test cluster (docker compose --profile test, port 5433). Never the dev cluster's port.
+ADMIN_OK = "postgresql://postgres:admin-secret@127.0.0.1:5433/postgres"
 DEV_URL = "postgresql+psycopg://postgres:dev-secret@127.0.0.1:5432/grounded_answers"
 
 
@@ -36,6 +38,31 @@ def test_admin_url_on_dev_database_is_refused(no_connections: None) -> None:
     admin_on_dev = "postgresql://postgres:admin-secret@127.0.0.1:5432/grounded_answers"
     with pytest.raises(GuardError, match="must connect to 'postgres'"):
         check_targets(admin_on_dev, [DEV_URL])
+
+
+def test_admin_on_dev_port_with_other_user_is_refused(no_connections: None) -> None:
+    """The dev cluster's port is refused even with another user: a test run would reset dev roles."""
+    admin_on_dev_port = "postgresql://postgres:other-secret@127.0.0.1:5432/postgres"
+    with pytest.raises(GuardError, match="same host and port as a dev URL"):
+        check_targets(admin_on_dev_port, [DEV_URL])
+
+
+def test_admin_on_dev_host_via_localhost_is_refused(no_connections: None) -> None:
+    """localhost and 127.0.0.1 reach the same server, so the name spelling does not get around it."""
+    admin_on_dev_host = "postgresql://postgres:other-secret@localhost:5432/postgres"
+    with pytest.raises(GuardError, match="same host and port as a dev URL"):
+        check_targets(admin_on_dev_host, [DEV_URL])
+
+
+def test_admin_on_test_cluster_port_is_allowed(no_connections: None) -> None:
+    """The dedicated test cluster (port 5433) passes next to a dev URL on 5432."""
+    admin_on_test_cluster = "postgresql://postgres:test-secret@127.0.0.1:5433/postgres"
+    check_targets(admin_on_test_cluster, [DEV_URL])
+
+
+def test_endpoint_normalises_localhost() -> None:
+    assert endpoint("postgresql://u:p@localhost:5432/x") == ("127.0.0.1", 5432)
+    assert endpoint("postgresql://u:p@127.0.0.1:5433/x") == ("127.0.0.1", 5433)
 
 
 def test_admin_url_on_test_database_is_refused(no_connections: None) -> None:
