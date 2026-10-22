@@ -1,0 +1,123 @@
+"""
+Session fixture that builds the test database (ADR 0006, amended 2026-10-22).
+
+Order, once per pytest session:
+  1. Guard: refuse unsafe targets before anything is dropped (guard.py).
+  2. Drop and recreate grounded_answers_test (through the admin URL, which is the only
+     connection with that privilege).
+  3. Generate a fresh random password per login role for this session.
+  4. Compute each role's SCRAM verifier with libpq (build_verifier), never by hand.
+  5. Run the SAME two SQL files the operator runs, through psql (PSQL_COMMAND):
+       bootstrap_cluster.sql   against the maintenance database
+       bootstrap_database.sql  against grounded_answers_test
+
+Failures raise. Nothing is skipped: a missing database or psql is an error (ADR 0006).
+"""
+
+import os
+import secrets
+import shlex
+from collections.abc import Iterator
+from pathlib import Path
+from types import MappingProxyType
+from urllib.parse import urlsplit, urlunsplit
+
+import psycopg
+import pytest
+from alembic.config import Config
+from psycopg import sql
+
+from alembic import command
+from grounded_answers.scram import build_verifier
+
+from .database import LOGIN_ROLES, DbHandle
+from .guard import TEST_DB_NAME, check_targets
+from .psql import run_sql_file
+from .seed import Seeded, seed
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+REPO_ROOT = BACKEND_DIR.parent
+SCRIPTS_DIR = BACKEND_DIR / "scripts"
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"{name} is not set. DB tests fail when the database is unavailable; they never "
+            "skip (ADR 0006). See docs/RUNBOOK.md, 'Running database tests'."
+        )
+    return value
+
+
+def _dev_urls() -> list[str]:
+    """Dev URLs from the environment and from backend/.env, for the guard's reuse check."""
+    urls = [os.environ[k] for k in ("DATABASE_URL", "MIGRATION_DATABASE_URL") if k in os.environ]
+    env_file = BACKEND_DIR / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip() in ("DATABASE_URL", "MIGRATION_DATABASE_URL"):
+                urls.append(value.strip())
+    return urls
+
+
+@pytest.fixture(scope="session")
+def grounded_db() -> Iterator[DbHandle]:
+    """Fresh grounded_answers_test with cluster and database bootstrap applied."""
+    admin_url = _required_env("TEST_ADMIN_DATABASE_URL")
+    psql = shlex.split(_required_env("PSQL_COMMAND"))
+    check_targets(admin_url, _dev_urls())
+
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute(
+            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(TEST_DB_NAME))
+        )
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(TEST_DB_NAME)))
+
+    passwords = {role: secrets.token_urlsafe(24) for role in LOGIN_ROLES}
+    with psycopg.connect(admin_url) as admin:
+        verifiers = {role: build_verifier(admin, role, pw) for role, pw in passwords.items()}
+
+    env = dict(os.environ)
+    for role, verifier in verifiers.items():
+        env[f"{role.upper()}_SCRAM"] = verifier
+    redact = list(verifiers.values())
+
+    run_sql_file(psql, SCRIPTS_DIR / "bootstrap_cluster.sql", "postgres", env, redact)
+    run_sql_file(psql, SCRIPTS_DIR / "bootstrap_database.sql", TEST_DB_NAME, env, redact)
+
+    # Schema: the migrations run as migration_role, the same role production uses (ADR 0005).
+    admin_parts = urlsplit(admin_url)
+    migration_url = urlunsplit(
+        (
+            "postgresql+psycopg",
+            f"migration_role:{passwords['migration_role']}@"
+            f"{admin_parts.hostname}:{admin_parts.port}",
+            f"/{TEST_DB_NAME}",
+            "",
+            "",
+        )
+    )
+    previous = os.environ.get("MIGRATION_DATABASE_URL")
+    os.environ["MIGRATION_DATABASE_URL"] = migration_url
+    try:
+        command.upgrade(Config(str(BACKEND_DIR / "alembic.ini")), "head")
+    finally:
+        if previous is None:
+            os.environ.pop("MIGRATION_DATABASE_URL", None)
+        else:
+            os.environ["MIGRATION_DATABASE_URL"] = previous
+
+    yield DbHandle(
+        admin_url=admin_url,
+        base=urlsplit(admin_url),
+        passwords=MappingProxyType(passwords),
+        verifiers=MappingProxyType(verifiers),
+    )
+
+
+@pytest.fixture(scope="session")
+def seeded(grounded_db: DbHandle) -> Seeded:
+    """Two complete tenants, written as the cluster admin (RLS bypass, test setup only)."""
+    return seed(grounded_db.admin_test_url())

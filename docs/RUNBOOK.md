@@ -60,6 +60,24 @@ npm run dev
 
 Visit http://127.0.0.1:3000 (frontend) and http://127.0.0.1:8000/health (backend). See Dev Host Rule above.
 
+### Health and readiness (ADR 0009)
+
+| Endpoint | Question it answers | Checks | 200 | Not OK |
+|---|---|---|---|---|
+| `GET /health` | Is the process running? | None | `{"status":"ok"}` | No response (process down) |
+| `GET /ready` | Can it serve requests? | PostgreSQL as `app_user` (`SELECT 1`); Valkey `PING`; schema head equals `EXPECTED_SCHEMA_HEAD` | `{"status":"ready"}` | `503 {"status":"not_ready","failed":[...]}` |
+
+- `failed` holds only `"database"`, `"cache"` or `"schema"`. Hostnames, messages and versions are never in the response.
+- If the database fails, `schema` is not listed. It fails for the same reason, so only the root cause is named.
+- Each check has a 1 s timeout. All checks together have a 2 s budget. Results are cached for 2 s, so a load balancer polling `/ready` never opens a connection per request.
+- The server log holds the detail, one line per failed check, for example `readiness check failed: schema (ProgrammingError)` or `readiness check failed: schema (version mismatch: found 0003_policies_and_definers, expected 0004_alembic_version_grant)`. The log never holds an exception message, because messages can contain hosts or credentials.
+
+Check it:
+
+```powershell
+curl.exe -i http://127.0.0.1:8000/ready
+```
+
 ## Troubleshooting
 
 ### Port 5432 (PostgreSQL) Already in Use
@@ -97,6 +115,44 @@ Restart docker-compose:
 docker compose down
 docker compose up -d
 ```
+
+### Dev bootstrap problems (Session 2)
+
+**App crashes at startup: `migration_database_url: Extra inputs are not permitted`**
+- Cause: `MIGRATION_DATABASE_URL` is in `backend\.env`. The web app loads that file, and `Settings` forbids unknown keys.
+- Fix: delete that line. Set the migration URL in the shell only (see "Migration credentials"). `tests/test_env_example.py` guards the example file.
+
+**A DB test run stops `app_user` or `migration_role` from logging in**
+- Cause: the test admin URL pointed at the dev cluster. The fixture resets the three login roles' passwords on every run.
+- Fix: rerun dev bootstrap steps 3 and 4 with the passwords you intend to keep, then `verify_login.py`. Keep `TEST_ADMIN_DATABASE_URL` on port 5433. The guard refuses the dev host and port, but only when `backend\.env` has a `DATABASE_URL`.
+
+**`ROLE_SCRAM is not set` (or another SCRAM variable) when a reset or bootstrap runs**
+- Cause: `docker compose exec -e NAME` forwards only the variables it names. The variable is set in PowerShell, but it never reaches the container.
+- Fix: name it in the command: `-e ROLE_SCRAM`. The same rule applies to `PSQL_COMMAND` for the test cluster.
+
+**`no such service: postgres-test`**
+- Cause: the test cluster is in a compose profile, so plain `docker compose` ignores it.
+- Fix: add `--profile test` to every command that touches `postgres-test`.
+
+**`/ready` returns 503 `schema`, and the log says `ProgrammingError`**
+- Cause: the table `grounded.alembic_version` does not exist. Migrations have not run on this database.
+- Fix: run dev bootstrap step 7 (`alembic upgrade head`).
+
+**`/ready` returns 503 `schema`, and the log says `version mismatch`**
+- Cause: the database is at an older or newer head than the code expects.
+- Fix: run `alembic upgrade head` (older) or deploy matching code (newer). Check with `alembic current`.
+
+**`password authentication failed` (SQLSTATE `28P01`) from `verify_login.py`**
+- Cause: the password you typed does not match the one stored in the cluster.
+- Fix: "Reset one role's password" for that role. Update `backend\.env` if it is `app_user`.
+
+**Connection string errors after a password change**
+- Cause: a password character such as `@`, `:`, `/` or `#` breaks the URL.
+- Fix: use only letters, digits, `-` and `_`. Regenerate with `secrets.token_urlsafe(24)`.
+
+**`psycopg async needs a selector event loop` on Windows**
+- Cause: uvicorn started without the selector loop flag, so it uses the Proactor loop.
+- Fix: start the API with `--loop grounded_answers.runtime:selector_loop_factory` (see "Running Services").
 
 ### Gitleaks Fails on First Push
 
@@ -152,6 +208,258 @@ npx tsc --noEmit
 npm audit --audit-level=high
 npm run build
 ```
+
+## Dependency Upgrades (ADR 0005)
+
+- **Wait 7 days after a release before a manual upgrade.** Dependabot applies the same cooldown to automatic PRs. Security advisories are not delayed.
+- Do not add a date-based hold (`exclude-newer`) to `pyproject.toml`. A forgotten hold would also block security fixes.
+- The lock file keeps existing pins. Only `uv lock --upgrade` or `--upgrade-package` moves them.
+
+## Running Database Tests (ADR 0006)
+
+DB tests run on their own PostgreSQL cluster, `postgres-test`, on port **5433**. The dev cluster is on 5432. Each test run resets the passwords of `migration_role`, `app_user` and `worker_user` on the cluster it targets. So the test admin URL must never point at the dev cluster. The guard (`tests/db/guard.py`) refuses an admin URL on the same host and port as a dev URL (dev URLs come from `backend\.env`).
+
+DB tests fail, never skip, when the test cluster is unavailable. Start it only when you run DB tests:
+
+```powershell
+cd C:\Users\Admin\Desktop\portfolio-v2\grounded-answers
+docker compose --profile test up -d postgres-test redis
+docker compose --profile test ps postgres-test
+```
+
+Expected: `postgres-test` shows `Up ... (healthy)`. Wait until it is healthy. Redis (Valkey) is needed for the readiness DB tests.
+
+```powershell
+cd C:\Users\Admin\Desktop\portfolio-v2\grounded-answers\backend
+
+# Admin URL for the TEST cluster (port 5433, maintenance database 'postgres').
+# Built from the root .env without printing the password:
+$t = @{}
+Get-Content ..\.env | ForEach-Object { if ($_ -match '^(TEST_POSTGRES_USER|TEST_POSTGRES_PASSWORD)=(.*)$') { $t[$matches[1]] = $matches[2] } }
+$env:TEST_ADMIN_DATABASE_URL = "postgresql://$($t.TEST_POSTGRES_USER):$($t.TEST_POSTGRES_PASSWORD)@127.0.0.1:5433/postgres"
+
+# psql runs inside the test cluster's container (same PostgreSQL 17 image as the server).
+$env:PSQL_COMMAND = 'docker compose --profile test exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM -e ROLE_SCRAM postgres-test psql'
+
+uv run pytest -m db -v          # database tests
+uv run pytest -m "not db"       # unit tests (no database needed)
+```
+
+The fixture drops and recreates `grounded_answers_test` on the test cluster only. The guard refuses any other target before it connects.
+
+### Dev database bootstrap (first time, or after resetting the dev cluster)
+
+Same SQL the tests run (ADR 0006). Passwords are typed at a hidden prompt and never appear on the command line. Run from the repo root.
+
+**1. Start the dev cluster and Valkey.** `postgres` must show `(healthy)`.
+
+```powershell
+docker compose up -d postgres redis
+docker compose ps
+```
+
+**2. Set the bootstrap admin URL** (dev superuser, from the root `.env`, password not printed):
+
+```powershell
+$d = @{}
+Get-Content .env | ForEach-Object { if ($_ -match '^POSTGRES_PASSWORD=(.*)$') { $d.pw = $matches[1] } }
+$env:BOOTSTRAP_ADMIN_URL = "postgresql://postgres:$($d.pw)@127.0.0.1:5432/postgres"
+```
+
+**3. Set the role passwords.** Type each password twice at the hidden prompt. Keep them: `app_user` and `migration_role` go into `backend\.env` (step 7).
+
+```powershell
+$env:APP_USER_SCRAM       = uv run --directory backend python scripts/make_scram_verifier.py app_user
+$env:WORKER_USER_SCRAM    = uv run --directory backend python scripts/make_scram_verifier.py worker_user
+$env:MIGRATION_ROLE_SCRAM = uv run --directory backend python scripts/make_scram_verifier.py migration_role
+```
+
+**4. Cluster bootstrap** (roles and passwords). Expect `ALTER ROLE` and `GRANT` lines, no `ERROR`. Safe to re-run.
+
+```powershell
+Get-Content -Raw backend\scripts\bootstrap_cluster.sql | docker compose exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f -
+if ($LASTEXITCODE -ne 0) { throw "cluster bootstrap failed" }
+```
+
+**5. Database bootstrap** (CONNECT grants, schema). Expect `GRANT` and `CREATE` lines, no `ERROR`.
+
+```powershell
+Get-Content -Raw backend\scripts\bootstrap_database.sql | docker compose exec -T postgres psql -U postgres -d grounded_answers -v ON_ERROR_STOP=1 -f -
+if ($LASTEXITCODE -ne 0) { throw "database bootstrap failed" }
+```
+
+**6. Verify the three logins** (see "Verify login" below). Expect three `LOGIN OK` lines.
+
+```powershell
+uv run --directory backend python scripts/verify_login.py app_user worker_user migration_role
+```
+
+**7. Migrations to head.** First define `Set-MigrationUrl` in this shell (code in "Migration credentials" below). Expect the last migration line to be `Running upgrade ... -> 0004_alembic_version_grant`, exit code 0.
+
+```powershell
+Set-MigrationUrl
+uv run --directory backend alembic upgrade head
+Remove-Item Env:MIGRATION_DATABASE_URL
+docker compose exec -T postgres psql -U postgres -d grounded_answers -tAc "SELECT version_num FROM grounded.alembic_version"
+```
+
+The last command prints `0004_alembic_version_grant`.
+
+**8. Point `backend\.env` at the app role.** Use the `app_user` password from step 3. The file must not contain any migration credential.
+
+```
+DATABASE_URL=postgresql+psycopg://app_user:<app_user password>@127.0.0.1:5432/grounded_answers
+```
+
+Passwords must use only URL-safe characters (letters, digits, `-` and `_`). A character such as `@` or `:` breaks the URL.
+
+**9. Start the API and check readiness.** Terminal 1 runs the API; terminal 2 checks it.
+
+```powershell
+# terminal 1
+uv run --directory backend uvicorn grounded_answers.main:create_app --factory --loop grounded_answers.runtime:selector_loop_factory --port 8000
+
+# terminal 2
+curl.exe -i http://127.0.0.1:8000/ready
+```
+
+Expect `HTTP/1.1 200 OK` and `{"status":"ready"}`. On 503, the body names the failed dependency: `database` (check `DATABASE_URL` and the cluster), `cache` (Valkey is not running), or `schema` (step 7 did not finish).
+
+`BOOTSTRAP_ADMIN_URL` is the **dev** superuser only. The test cluster has its own bootstrap, run by the test fixture.
+
+### Migration credentials
+
+The web app loads `backend\.env` (ADR 0004). So migration credentials are never written to any file, and the app never sees them. `alembic/env.py` reads `MIGRATION_DATABASE_URL` from the process environment only. Set it in the shell, for one session, with a hidden prompt:
+
+```powershell
+function Set-MigrationUrl {
+    $secure = Read-Host "migration_role password" -AsSecureString
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    $env:MIGRATION_DATABASE_URL = "postgresql+psycopg://migration_role:$plain@127.0.0.1:5432/grounded_answers"
+}
+```
+
+Run `Set-MigrationUrl`, then the migration command, then `Remove-Item Env:MIGRATION_DATABASE_URL`. The variable lives only in that shell. Closing the window also removes it.
+
+### Verify login
+
+`scripts/verify_login.py` connects as each role, runs `SELECT 1`, and prints one line per role. The password is typed at a hidden prompt. Driver messages are not printed, because they can include hosts.
+
+```powershell
+uv run --directory backend python scripts/verify_login.py app_user worker_user migration_role
+```
+
+Expect `LOGIN OK app_user`, `LOGIN OK worker_user`, `LOGIN OK migration_role`, and exit code 0. A failure prints `LOGIN FAILED <role>: <error class> (sqlstate <code>)`. `28P01` means the password does not match the one in the cluster (see "Reset one role's password").
+
+### Reset one role's password
+
+Use this when one role's password is lost or wrong. It changes only that role. The script refuses any name except `migration_role`, `app_user` and `worker_user`.
+
+```powershell
+$env:ROLE_SCRAM = uv run --directory backend python scripts/make_scram_verifier.py app_user
+Get-Content -Raw backend\scripts\reset_role_password.sql | docker compose exec -T -e ROLE_SCRAM postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -v role=app_user -f -
+if ($LASTEXITCODE -ne 0) { throw "reset failed" }
+Remove-Item Env:ROLE_SCRAM
+uv run --directory backend python scripts/verify_login.py app_user
+```
+
+Expect `ALTER ROLE` from psql, then `LOGIN OK app_user`. Change `app_user` in both places to reset another role. If you reset `app_user`, update `backend\.env` (step 8).
+
+## Admin CLI (platform owner, ADR 0004, ADR 0010)
+
+The admin CLI creates tenants, manages a tenant's allowed email domains, and creates the first tenant admin. It uses `migration_role`, so run it only on the operator's machine. It is never run in the web or worker containers.
+
+Before the first run on a database, apply all migrations (`alembic upgrade head`, the migration steps in "Migration credentials" above). The `tenant_email_domains` table comes from migration `0003`.
+
+```powershell
+cd C:\Users\Admin\Desktop\portfolio-v2\grounded-answers\backend
+
+# Set the migration URL for this shell only (the helper from "Migration credentials").
+Set-MigrationUrl
+
+uv run --group operator python -m grounded_answers.admin_cli create-tenant "Indus Freight Lines" indus-freight
+uv run --group operator python -m grounded_answers.admin_cli add-domain indus-freight indusfreight.test
+uv run --group operator python -m grounded_answers.admin_cli list-domains indus-freight
+uv run --group operator python -m grounded_answers.admin_cli create-admin indus-freight admin@indusfreight.test "Head of HR"
+
+Remove-Item Env:MIGRATION_DATABASE_URL
+```
+
+Expected output for each command, in order:
+
+```text
+Created tenant 'indus-freight' (<uuid>).
+Allowed 'indusfreight.test' for tenant 'indus-freight'.
+indusfreight.test
+Created tenant admin (<uuid>) for tenant 'indus-freight'.
+```
+
+Rules:
+
+- `create-admin` checks the tenant and the email domain first, before it asks for any password. A wrong domain fails at once, with no password prompt (the domain must already be allowed with `add-domain`). Then it asks for the password twice, with no echo. The two entries must match, and the password must be at least 12 characters and not on the common-password list.
+- `remove-domain` removes the domain from the allowlist. Existing accounts keep working, so use it only to stop new accounts at that domain.
+- A refusal prints a short reason and exits with code 1. "Nothing was changed" means the whole command rolled back.
+- If the command says it must connect as `migration_role`, the URL points at another login. Fix the URL and run it again.
+- `Remove-Item Env:MIGRATION_DATABASE_URL` at the end removes the URL from the shell. Closing the window also removes it.
+
+To check the tests for the CLI: `uv run pytest -m "not db" tests/test_admin_cli.py tests/test_passwords.py`, then the DB tests with the RUNBOOK's "Running Database Tests" setup: `uv run pytest -m db tests/db/test_admin_cli.py`.
+
+## Rollback
+
+Two things roll back separately: the application and the database schema.
+
+**Rule: every migration must work with the previous app version.** Use expand-then-contract: add columns and tables first, remove old ones in a later release. Then an app rollback needs no schema rollback. If an older app ever meets a newer schema, `/ready` returns 503 `schema`, so the mismatch is visible at once.
+
+**Application rollback**
+1. Redeploy the previous image or commit.
+2. Check `GET /ready` returns 200. A 503 `schema` means the schema head and the code no longer match. Go to schema rollback.
+
+**Schema rollback (Alembic, as `migration_role`)**
+
+```powershell
+Set-MigrationUrl
+uv run --directory backend alembic current          # expect: 0004_alembic_version_grant (head)
+uv run --directory backend alembic downgrade -1     # reverts one revision
+Remove-Item Env:MIGRATION_DATABASE_URL
+```
+
+Before any downgrade, check what it removes:
+
+| Revision | Downgrade removes | Data loss | Effect on the app |
+|---|---|---|---|
+| 0004 | `app_user` SELECT on `alembic_version` | No | `/ready` reports `schema` |
+| 0003 | RLS policies, definer functions and their grants | No | Tenant policies gone; RLS stays on, so with no policies every row is hidden (fail closed) |
+| 0002 | Table and column grants | No | App cannot read or write |
+| 0001 | Every table | **Yes, all data** | Everything |
+
+- Never run `downgrade base` on a database that holds data.
+- The round-trip test (`tests/db/test_migration_round_trip.py`) proves upgrade, downgrade and upgrade again on an empty database. It does not prove that data survives a downgrade.
+- For a production rollback, take a backup first and record the backup time here.
+
+## Branch protection (`main`)
+
+In effect since 2026-10-22. The repo is public. Verify it with:
+
+```powershell
+gh api repos/hamzawithpython/grounded-answers/branches/main/protection --jq '{checks: .required_status_checks.contexts, reviews: .required_pull_request_reviews.required_approving_review_count, enforce_admins: .enforce_admins.enabled, force_push: .allow_force_pushes.enabled, deletions: .allow_deletions.enabled}'
+```
+
+Expected: `checks` is `["backend","backend-db","frontend","security"]`, `reviews` is `0`, `enforce_admins` is `true`, `force_push` and `deletions` are `false`.
+
+The four required checks are the merge gate. Required approvals are `0` because this is a solo project: a PR's author cannot approve their own PR, so a required review would block every merge. Admins are enforced, so no one bypasses the checks. If a second maintainer joins, set the required approvals back to 1 and update this section and SECURITY.md (R7).
+
+## Restore after a backup (planned with the purge job, Session 3)
+
+A backup holds deleted content until the provider's backup window expires (SECURITY.md, ADR 0007). A restore therefore brings back documents whose purge date has passed. Until the purge job exists, **do not restore user data from a backup**.
+
+Once the purge job exists, the restore procedure is:
+
+1. Restore into a new database, never over the live one.
+2. Run the purge job in catch-up mode, for every document with `purge_after < now()`.
+3. Check the audit log: each of those documents has a `document.purged` or `document_version.purged` entry.
+4. Only then point the app at the restored database, and check `/ready`.
+
+This section is a plan. Steps 2 and 3 are not testable until the purge job is written, and this section will be updated then.
 
 ## Deployment
 

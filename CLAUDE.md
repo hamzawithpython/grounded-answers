@@ -44,8 +44,15 @@ Read `docs/SPEC.md` and `docs/PROGRESS.md` at the start of every session.
 - `docs/PROGRESS.md` — what is done, what is next, open questions (update at the end of every session)
 - `CHANGELOG.md` — summary of changes
 
+## Migrations (hard rule)
+- Once a migration has been applied to any persistent database (dev or prod), never edit it. Create a new migration instead. Edits are allowed only for migrations that exist solely in ephemeral test databases.
+
+## Git (hard rule)
+- Before every commit, run `git branch --show-current`. Never commit on `main`; if on `main`, create a branch first.
+
 ## Usage efficiency (my Claude usage is limited)
 - Keep explanations clear but concise. No repeating content I already have.
 - Read only the files needed for the current step.
 - Prefer one complete, correct change over many partial attempts.
 - At the end of each session, update `docs/PROGRESS.md` so the next session can start quickly.
+- When waiting for CI, start ONE monitor per run. Don't start duplicate monitors or repeat results already reported.

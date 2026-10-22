@@ -1,6 +1,6 @@
 # ADR 0004: Authentication — Self-Built JWT in FastAPI
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-10-22: suspended tenants, see "Suspended tenants")
 
 **Date:** 2026-10-22
 
@@ -78,7 +78,7 @@ Because `users` has no tenant column, RLS on it is policy-based, not column-base
 
 | Function | Used for | Returns (minimum columns) | Why it exists |
 |---|---|---|---|
-| `auth_login_lookup(email)` | Login | `user_id`, `password_hash`, `user_active`, `tenant_id`, `membership_role`, `membership_active` | Login happens before tenant context exists. |
+| `auth_login_lookup(email)` | Login | `user_id`, `password_hash`, `user_active`, `tenant_id`, `tenant_status`, `membership_role`, `membership_active` | Login happens before tenant context exists. `tenant_status` was added in the 2026-10-22 amendment (suspended tenants). |
 | `auth_refresh_lookup(token_hash)` | Refresh | `token_id`, `user_id`, `tenant_id`, `family_id`, `used_at`, `revoked_at`, `expires_at` | The opaque token doesn't say which tenant it belongs to. |
 
 After either lookup, the app runs `SET LOCAL app.current_tenant`, and all further reads and writes go through normal RLS. The functions only read; rotation, revocation and writes always run as `app_user` under RLS.
@@ -103,6 +103,7 @@ A `SECURITY DEFINER` function runs as its owner. We give ownership of the two fu
 | `users` | SELECT | `CREATE POLICY auth_definer_login ON users FOR SELECT TO auth_definer USING (true)` | `auth_login_lookup` |
 | `tenant_memberships` | SELECT | `CREATE POLICY auth_definer_login ON tenant_memberships FOR SELECT TO auth_definer USING (true)` | `auth_login_lookup` |
 | `refresh_tokens` | SELECT | `CREATE POLICY auth_definer_refresh ON refresh_tokens FOR SELECT TO auth_definer USING (true)` | `auth_refresh_lookup` |
+| `tenants` | SELECT | `CREATE POLICY auth_definer_login ON tenants FOR SELECT TO auth_definer USING (true)` | `auth_login_lookup` (reads `status` only) |
 
 - Column-level `GRANT SELECT` on only the columns listed in the function table above.
 - No INSERT, UPDATE or DELETE for `auth_definer`. Writes always run as `app_user`.
@@ -121,6 +122,20 @@ A `SECURITY DEFINER` function runs as its owner. We give ownership of the two fu
 - **Application and CLI roles:** `app_user`, `auth_definer`, and the migration role are never granted `BYPASSRLS`.
 - **Migration role and the admin CLI's RLS treatment:** the migration role owns the tenant tables, and `FORCE ROW LEVEL SECURITY` applies to owners too. Platform-owner operations (creating tenants, cross-tenant evals) need the migration role to see all tenants. So each tenant table gets an explicit policy `TO migration_role USING (true) WITH CHECK (true)`. This is an explicit grant, not a bypass, and it's visible in the policy list. It is also the only cross-tenant access for operators. *New fact for review:* the migration role is unrestricted across tenants through these policies, which is why its credentials stay on the operator's machine or in a protected CI secret.
 - **Superusers always bypass RLS.** The Docker `postgres` user is a superuser, so the app never connects as it. Step 6's superuser test documents this.
+
+### Suspended tenants (amendment, 2026-10-22)
+
+A tenant can be `suspended` (see `tenants.status` in ARCHITECTURE.md). Suspension blocks access without deleting data.
+
+- **Login** (`auth_login_lookup`) returns `tenant_status`. For a suspended tenant, login returns the **same generic `401 Invalid email or password`** as a wrong password, with the same body and timing. Unauthenticated callers must not learn that a tenant exists or is suspended.
+- **`tenants` RLS for `app_user`:** `FOR SELECT TO app_user USING (id = <current tenant>)`. The app reads its own tenant row and nothing else. No `INSERT`, `UPDATE` or `DELETE` grants. Platform changes go through the admin CLI (the migration role).
+- **Per-request check:** `tenant_session` reads the tenant row in the same transaction as the membership check. A suspended tenant returns **`403 Tenant access is suspended`**. Only already-authenticated users reach this, so it reveals nothing to strangers.
+- **Tests:**
+  - Login to a suspended tenant returns the generic `401`, byte-identical to a wrong password.
+  - An authenticated request for a suspended tenant returns `403`.
+  - `app_user` sees only its own tenant row.
+  - `app_user` cannot `UPDATE tenants`.
+  - `auth_definer` reads `tenants.status` only (the `tenants` policy grants no other access).
 
 ### Tenant admin user management (`app_user`, web app)
 
@@ -263,7 +278,7 @@ Settings: frontend `next dev -H 127.0.0.1` (the `dev` script), `NEXT_PUBLIC_API_
 
 - **Positive:** no vendor lock-in; no free-tier pause; refresh-token reuse is detected on next use.
 - **Negative:** we own the security work. Mitigation: libraries only, a test per rule, and a threat model in SECURITY.md (Session 2, Step 8).
-- **Negative:** two intentional RLS exceptions (login and refresh lookups). Both are read-only `SECURITY DEFINER` functions with hardened `search_path`, execute-restricted to `app_user`, owned by the non-login `auth_definer` role, which has narrow policies and no `BYPASSRLS`. Documented in ARCHITECTURE.md and tested.
+- **Negative:** two intentional RLS exceptions (login and refresh lookups). *Amended by ADR 0007: a third, read-only function, `retention_due_tenant_ids()`, returns tenant ids only, for the purge worker.* Both are read-only `SECURITY DEFINER` functions with hardened `search_path`, execute-restricted to `app_user`, owned by the non-login `auth_definer` role, which has narrow policies and no `BYPASSRLS`. Documented in ARCHITECTURE.md and tested.
 - **Negative:** the migration role is unrestricted across tenants through explicit policies (for operator work). Its credentials must stay off the web app and out of CI jobs that don't need them.
 - **Negative:** v1 allows one tenant membership per user (`UNIQUE(user_id)`).
 - **Negative:** the access token lives in JS memory, so an XSS bug could read it during its 15-minute life. Mitigations: strict CSP, no `dangerouslySetInnerHTML`, short lifetime.
@@ -295,6 +310,7 @@ Settings: frontend `next dev -H 127.0.0.1` (the `dev` script), `NEXT_PUBLIC_API_
   - Refresh: reuse detection revokes the family; grace-window retry does not; logout-all; expired and wrong-`alg` tokens rejected; forged `tid` returns 401.
   - Login: lockout per (email, IP); per-IP limit; progressive delay; generic error text; dummy-hash timing path.
   - Functions: both return only minimum columns and execute only for `app_user`; `auth_definer` cannot log in and has no access outside its policies.
+  - Suspended tenants: generic `401` at login; `403` per request; `app_user` sees only its own tenant row and cannot update `tenants` (see "Suspended tenants").
   - Superuser bypass documented; audit row written; `Secure` cookie accepted on `http://127.0.0.1`.
 - Tests (Step 6), tenant-admin user management:
   - `app_user` sees only users with a membership in the current tenant; zero rows with no tenant context; zero rows for another tenant.
@@ -309,3 +325,32 @@ Settings: frontend `next dev -H 127.0.0.1` (the `dev` script), `NEXT_PUBLIC_API_
 
 - ADR 0001 Monorepo Layout · ADR 0002 Dependency Managers · ADR 0003 Valkey (rate limits and lockout)
 - Pending: ADR 0005 (database access layer), ADR 0006 (DB-dependent test strategy)
+
+## Amendment (2026-10-22): employee creation through create_tenant_user (decision B)
+
+**Decision.** `app_user` has no INSERT on `users` or `tenant_memberships`. Employees are created only by `grounded.create_tenant_user(p_email, p_display_name, p_role)`. The actor and the tenant are not parameters: they come from the session settings `app.current_user` and `app.current_tenant`, which the one auth code path sets together in the same transaction. It is a narrow `SECURITY DEFINER` function owned by a new `provisioning_definer` role (NOLOGIN, NOBYPASSRLS, owns only this function). It writes the user and the membership in one transaction, so a membership-less user cannot be created through the app.
+
+**What the function checks, in order** (any failure raises the same error):
+1. The tenant comes from the session setting `app.current_tenant`, never from a parameter. Likewise the actor, from `app.current_user`.
+2. The actor (`app.current_user`) is an active `tenant_admin` of that tenant.
+3. The email's domain is on `tenant_email_domains` for that tenant (see below).
+4. The role is `employee` or `tenant_admin`, and the display name and email are well-formed.
+5. The insert of the user and membership runs in a sub-transaction. A unique violation on the email raises the same error.
+
+**Generic errors.** Every refusal returns SQLSTATE `P0001` and the message `could not create this user`. The caller cannot tell a wrong domain, a duplicate email (in this tenant or another), a non-admin actor, another tenant's admin, or a missing tenant from each other. Tests compare SQLSTATE and message across all six causes.
+
+**Allowlist (squatting mitigation).** `tenant_email_domains` is a tenant-owned allowlist. `app_user` can read its own tenant's rows. Only `migration_role` (the operator and admin CLI) writes it. An admin can create accounts only at domains the operator has approved for that tenant.
+
+**Defence in depth, not a hard boundary.** The actor id and the tenant come from session values the app sets (`app.current_user` and `app.current_tenant`). A compromised app process could send any actor id for the session tenant. The function's checks stop the cases a buggy or unprivileged caller would hit, but they do not stop an app that already controls the session. The hard boundary is that the app can only reach this function, not the tables behind it.
+
+**Residual risks (accepted for v1):**
+- **Email squatting inside an approved domain.** A tenant admin can create an account for any name at an approved domain, including a person who has not joined yet. Only email verification removes this, and v1 sends no email (v2).
+- **Enumeration by the admin.** The global email uniqueness is an oracle, but only for an authenticated admin, and the generic error keeps the oracle to yes-or-no per attempt. Mitigation: rate limit on the create endpoint and an audit entry per attempt (application layer, Step 6+).
+- **Orphan users.** Not possible through the function (one transaction). Possible only through direct database access by migration_role.
+
+**Why not an INSERT policy on users (option A).** It would let app_user create any user, including orphans and other tenants' employees, with no tenant check on the user row itself (users has no tenant column). Rejected.
+
+**Why not an invitation table (option C).** It moves squatting to acceptance time, where it is no less risky without email verification, and adds a table and a flow that v1 does not need.
+
+Tests: `tests/db/test_create_tenant_user.py` (success, every refusal, identical refusals, no row created on refusal) and `tests/db/test_rls_insert.py` (cross-tenant INSERT refused on every table, including `audit_log` with a NULL actor).
+
