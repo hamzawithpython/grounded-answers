@@ -26,11 +26,49 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run ruff check src/ tests/
-      - run: uv run ruff format --check src/ tests/
-      - run: uv run mypy src/ tests/
+      - run: uv run ruff check src/ tests/ scripts/ alembic/
+      - run: uv run ruff format --check src/ tests/ scripts/ alembic/
+      - run: uv run mypy src/ tests/ scripts/ alembic/
       - run: uv run --with pip-audit pip-audit
-      - run: uv run pytest tests/
+      - run: uv run pytest -m "not db"
+
+  backend-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        # Same pinned image as docker-compose.yml (ADR 0006)
+        image: pgvector/pgvector:0.8.7-pg17
+        env:
+          # Obviously fake, test-only (ADR 0006). Never used by the app.
+          POSTGRES_PASSWORD: ci-test-only-not-a-secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Admin URL for the test fixture only: drop, create, bootstrap (ADR 0006).
+      TEST_ADMIN_DATABASE_URL: postgresql://postgres:ci-test-only-not-a-secret@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      # psql comes from the pinned server image, so its version matches the server.
+      # The fixture pipes the same .sql files the operator runs (ADR 0006 amendment).
+      - name: Point the fixture at psql in the PostgreSQL container
+        run: |
+          cid=$(docker ps -q --filter ancestor=pgvector/pgvector:0.8.7-pg17 | head -n 1)
+          if [ -z "$cid" ]; then echo "PostgreSQL service container not found"; exit 1; fi
+          echo "PSQL_COMMAND=docker exec -i -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM $cid psql" >> "$GITHUB_ENV"
+      - run: uv run pytest -m db -v
 
   frontend:
     runs-on: ubuntu-latest

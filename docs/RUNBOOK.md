@@ -153,6 +153,45 @@ npm audit --audit-level=high
 npm run build
 ```
 
+## Dependency Upgrades (ADR 0005)
+
+- **Wait 7 days after a release before a manual upgrade.** Dependabot applies the same cooldown to automatic PRs. Security advisories are not delayed.
+- Do not add a date-based hold (`exclude-newer`) to `pyproject.toml`. A forgotten hold would also block security fixes.
+- The lock file keeps existing pins. Only `uv lock --upgrade` or `--upgrade-package` moves them.
+
+## Running Database Tests (ADR 0006)
+
+DB tests need the local PostgreSQL container (`docker compose up -d postgres`). They fail, never skip, when it is unavailable.
+
+```powershell
+cd C:\Users\Admin\Desktop\portfolio-v2\grounded-answers\backend
+
+# Admin URL: the cluster admin, maintenance database 'postgres'. Used only by the test fixture.
+# Set it from backend\.env without printing it:
+$admin = (Get-Content .env | Where-Object { $_ -like 'DATABASE_URL=*' }) -replace '^DATABASE_URL=', ''
+$env:TEST_ADMIN_DATABASE_URL = $admin -replace '^postgresql\+psycopg://', 'postgresql://' -replace '/grounded_answers$', '/postgres'
+
+# psql runs inside the same PostgreSQL 17 container as the server.
+$env:PSQL_COMMAND = 'docker compose exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres psql'
+
+uv run pytest -m db -v          # database tests
+uv run pytest -m "not db"       # unit tests (no database needed)
+```
+
+The fixture drops and recreates `grounded_answers_test` only. The guard (`tests/db/guard.py`) refuses any other target before it connects.
+
+**Operator bootstrap (manual, same SQL the tests run).** Passwords are typed at a hidden prompt and never appear on the command line:
+
+```powershell
+$env:APP_USER_SCRAM       = uv run --directory backend python scripts/make_scram_verifier.py app_user
+$env:WORKER_USER_SCRAM    = uv run --directory backend python scripts/make_scram_verifier.py worker_user
+$env:MIGRATION_ROLE_SCRAM = uv run --directory backend python scripts/make_scram_verifier.py migration_role
+Get-Content -Raw backend\scripts\bootstrap_cluster.sql | docker compose exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f -
+Get-Content -Raw backend\scripts\bootstrap_database.sql | docker compose exec -T postgres psql -U postgres -d grounded_answers -v ON_ERROR_STOP=1 -f -
+```
+
+`BOOTSTRAP_ADMIN_URL` must be set for `make_scram_verifier.py` (same value as `TEST_ADMIN_DATABASE_URL`, pointing at `postgres`).
+
 ## Deployment
 
 TBD: Add deployment instructions for production hosting.
