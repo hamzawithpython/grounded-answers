@@ -78,7 +78,7 @@ jobs:
         run: |
           cid=$(docker ps -q --filter ancestor=pgvector/pgvector:0.8.7-pg17 | head -n 1)
           if [ -z "$cid" ]; then echo "PostgreSQL service container not found"; exit 1; fi
-          echo "PSQL_COMMAND=docker exec -i -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM $cid psql" >> "$GITHUB_ENV"
+          echo "PSQL_COMMAND=docker exec -i -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM -e ROLE_SCRAM $cid psql" >> "$GITHUB_ENV"
       - run: uv run pytest -m db -v
 
   frontend:
