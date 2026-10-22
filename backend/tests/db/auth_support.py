@@ -5,6 +5,7 @@ Registered for every DB test in tests/db/conftest.py, so test modules can reques
 `client` without importing them. Helpers that tests call directly are imported explicitly.
 """
 
+import os
 import secrets
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from typing import Any
 
 import psycopg
 import pytest
+import redis
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
@@ -31,6 +33,25 @@ LOGIN_BODY_MARKER = "MARKER-DO-NOT-ECHO"
 UNSIGNED_KEY: Any = None
 
 
+VALKEY_TEST_URL = os.environ.get("TEST_VALKEY_URL", "redis://127.0.0.1:6379/15")
+
+
+def flush_test_valkey() -> None:
+    """
+    Empty the test Valkey database before each test, so counters from one test never reach another.
+    The guard refuses any URL that does not name database 15, so no other database is ever flushed.
+    """
+    if not VALKEY_TEST_URL.endswith("/15"):
+        raise RuntimeError(
+            "the test Valkey URL must select database 15 (flushing is limited to it)"
+        )
+    client = redis.Redis.from_url(VALKEY_TEST_URL, socket_connect_timeout=2)
+    try:
+        client.flushdb()
+    finally:
+        client.close()
+
+
 @dataclass(frozen=True)
 class Accounts:
     handle: DbHandle
@@ -39,6 +60,7 @@ class Accounts:
     employee_email: str
     password: str
     hmac_key: str
+    rate_key: str
     key_path: Path
 
 
@@ -76,10 +98,13 @@ def accounts(
     key_path = tmp_path / "jwt-keys.json"
     write_new_key_file(key_path)
     hmac_key = secrets.token_urlsafe(48)
+    rate_key = secrets.token_urlsafe(48)
+    flush_test_valkey()
     monkeypatch.setenv("DATABASE_URL", app_url(grounded_db))
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    monkeypatch.setenv("REDIS_URL", VALKEY_TEST_URL)
     monkeypatch.setenv("AUTH_JWT_KEYS_FILE", str(key_path))
     monkeypatch.setenv("AUTH_LOG_HMAC_KEY", hmac_key)
+    monkeypatch.setenv("AUTH_RATE_LIMIT_HMAC_KEY", rate_key)
     get_settings.cache_clear()
 
     yield Accounts(
@@ -89,6 +114,7 @@ def accounts(
         employee_email=employee_email,
         password=password,
         hmac_key=hmac_key,
+        rate_key=rate_key,
         key_path=key_path,
     )
     get_settings.cache_clear()

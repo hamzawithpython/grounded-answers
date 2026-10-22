@@ -13,15 +13,17 @@ from grounded_answers.auth_keys import KeyFileError, load_key_ring
 from grounded_answers.config import Settings, get_settings
 from grounded_answers.database import create_database_engine, create_session_factory
 from grounded_answers.passwords import make_dummy_hash
+from grounded_answers.rate_limit import LoginLimiter, wall_clock_ms
 from grounded_answers.readiness import (
     ReadinessChecker,
     make_cache_check,
     make_database_check,
     make_schema_check,
 )
+from grounded_answers.timing import TimingFloor
 
 
-async def _load_auth_state(app: FastAPI, settings: Settings) -> None:
+async def _load_auth_state(app: FastAPI, settings: Settings, cache: Redis) -> None:
     """
     Load what login needs before the app takes requests (ADR 0004).
 
@@ -42,6 +44,14 @@ async def _load_auth_state(app: FastAPI, settings: Settings) -> None:
         raise RuntimeError("AUTH_LOG_HMAC_KEY must be at least 32 characters")
     app.state.auth_hmac_key = secret.encode("ascii")
     app.state.dummy_hash = await run_in_threadpool(make_dummy_hash)
+    if settings.auth_rate_limit_hmac_key is None:
+        raise RuntimeError("AUTH_RATE_LIMIT_HMAC_KEY is not set (docs/RUNBOOK.md, Auth keys)")
+    rate_secret = settings.auth_rate_limit_hmac_key.get_secret_value()
+    if len(rate_secret) < 32:
+        raise RuntimeError("AUTH_RATE_LIMIT_HMAC_KEY must be at least 32 characters")
+    app.state.cache = cache
+    app.state.limiter = LoginLimiter(cache, rate_secret.encode("ascii"), wall_clock_ms)
+    app.state.timing = TimingFloor(floor_seconds=settings.auth_login_floor_ms / 1000)
 
 
 def _make_lifespan(
@@ -76,7 +86,7 @@ def _make_lifespan(
             }
         )
         try:
-            await _load_auth_state(app, settings)
+            await _load_auth_state(app, settings, cache)
             yield
         finally:
             await engine.dispose()
