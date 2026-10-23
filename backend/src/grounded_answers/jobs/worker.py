@@ -8,14 +8,19 @@ WORKER_EMBEDDING_MODEL_DIR, see docs/RUNBOOK.md):
 
 It logs in as worker_user. It uses the selector event loop, as the API does, because psycopg's async driver
 needs it on Windows. The model is loaded once, here at startup, and the worker refuses to start if the model
-files are missing or do not match their pins. Windows cannot stop the worker gracefully (upstream limit,
-ADR 0015): stop it by its process ID. That is safe, because delivery is at least once and every job is
-idempotent.
+files are missing or do not match their pins. It also checks the database login once, at startup, so a wrong
+password stops the worker with a clear message instead of a retry loop. Windows cannot stop the worker
+gracefully (upstream limit, ADR 0015): stop it by its process ID. That is safe, because delivery is at least
+once and every job is idempotent.
 """
 
 import asyncio
 import sys
 from pathlib import Path
+from typing import Final
+
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from grounded_answers.database import create_database_engine, create_session_factory
 from grounded_answers.embedding.model import ModelIntegrityError, load_embedder
@@ -26,9 +31,44 @@ from grounded_answers.runtime import selector_loop_factory
 from grounded_answers.storage.postgres_store import PostgresObjectStore
 from grounded_answers.worker_config import WorkerSettings
 
+LOGIN_CHECK_TIMEOUT_SECONDS: Final = 10
+# A failed login is raised by the connection step, so psycopg attaches no SQLSTATE. The server's wording is the signal.
+AUTH_FAILURE_TEXT: Final = "password authentication failed"
+
+
+class WorkerLoginFailed(RuntimeError):
+    """The worker's database login was refused. The message names the role and nothing else: no URL, no password."""
+
+
+class WorkerDatabaseUnreachable(RuntimeError):
+    """The startup check could not reach the database in time. The message holds no detail from the driver."""
+
+
+async def check_worker_login(database_url: str) -> None:
+    """
+    Connect once as worker_user and run SELECT 1, with a short timeout (ADR 0022).
+
+    Raises WorkerLoginFailed on a wrong password, and WorkerDatabaseUnreachable on anything else.
+    The driver's exception is not chained, so a traceback cannot print the URL or a password.
+    """
+    engine = create_database_engine(database_url)
+    try:
+        async with asyncio.timeout(LOGIN_CHECK_TIMEOUT_SECONDS):
+            async with engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+    except DBAPIError as exc:
+        if AUTH_FAILURE_TEXT in str(exc.orig):
+            raise WorkerLoginFailed("database login failed for worker_user") from None
+        raise WorkerDatabaseUnreachable("database check failed") from None
+    except TimeoutError:
+        raise WorkerDatabaseUnreachable("database check timed out") from None
+    finally:
+        await engine.dispose()
+
 
 async def serve(*, conninfo: str, database_url: str, model_dir: Path, lease_seconds: int) -> None:
     embedder = load_embedder(model_dir)
+    await check_worker_login(database_url)
     engine = create_database_engine(database_url)
     session_factory = create_session_factory(engine)
     app = build_app(conninfo)
@@ -67,6 +107,8 @@ def main() -> None:
             loop_factory=selector_loop_factory,
         )
     except ModelIntegrityError as exc:
+        sys.exit(f"worker not started: {exc}")
+    except (WorkerLoginFailed, WorkerDatabaseUnreachable) as exc:
         sys.exit(f"worker not started: {exc}")
 
 

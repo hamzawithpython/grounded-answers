@@ -676,3 +676,14 @@ A: The test fixture reaches the database in two ways: a connection through the a
 
 **Q: How did you know the fix works?**
 A: With the admin URL on the dev port, the guard refused before any change, and the dev data was the same afterwards. With the test cluster as the admin URL and the psql command pointed at the dev container, it refused with a message that names the mismatch, again before any change. Each refusal has a unit test as well.
+
+## Session 4 (worker startup login check): plain words
+
+### A failed login has no SQLSTATE when the connection itself fails
+A SQLSTATE is a five-character error code that PostgreSQL sends with an error (for example `28P01` for a wrong password). We expected the driver to expose it on a failed login, but psycopg raises the connection error without one, so the code was `None`. The server's wording, `password authentication failed`, was the only reliable signal. When we probed the real driver, we saw the same wording in every wrong-password attempt.
+
+**Q: Why not just check the SQLSTATE?**
+A: Check what the driver actually returns, with a probe, before you write the rule. Our first version looked right on paper, and our tests caught that it never matched. A rule that never matches fails safe here, because the worker still exits non-zero, but it gives the wrong message.
+
+**Q: Why does the worker exit instead of retrying a wrong password?**
+A: A wrong password does not get better with time. Retrying it forever is the loop we saw in the smoke test. A bounded reconnect is a different case (a database that restarts), and it needs a supervisor to restart the worker if it gives up. We deferred it to the deployment session.
