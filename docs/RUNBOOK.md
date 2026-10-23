@@ -209,6 +209,33 @@ npm audit --audit-level=high
 npm run build
 ```
 
+### Expected server log lines in backend-db
+
+The `backend-db` job's "Stop containers" step prints the PostgreSQL server log. It must show exactly these four lines, each `FATAL: password authentication failed for user "..."`:
+
+| Role | Test that causes it |
+|---|---|
+| migration_role | `tests/db/test_login.py::test_wrong_password_is_refused` |
+| app_user | `tests/db/test_login.py::test_wrong_password_is_refused` |
+| worker_user | `tests/db/test_login.py::test_wrong_password_is_refused` |
+| app_user | `tests/db/test_role_scripts.py::test_login_check_reports_a_wrong_password` |
+
+They are deliberate. Each one is a login with a wrong password, which the tests use to prove that PostgreSQL refuses it. PostgreSQL always logs a refused login, and the job still passes. Do not hide these lines by lowering the server log level: that would also hide real failures.
+
+A different count, a different role, or a line at another time means something changed. Investigate before merging. To check locally (set `TEST_ADMIN_DATABASE_URL` and `PSQL_COMMAND` first, as in "Running Database Tests" below):
+
+```powershell
+# Count the FATAL lines, run the four tests, count again. The difference must be 4.
+$before = (docker compose --profile test logs postgres-test 2>&1 | Select-String 'FATAL' | Measure-Object).Count
+cd backend
+uv run pytest -m db -k wrong_password
+cd ..
+$after = (docker compose --profile test logs postgres-test 2>&1 | Select-String 'FATAL' | Measure-Object).Count
+"new FATAL lines: $($after - $before)"
+```
+
+`-k wrong_password` also selects `test_auth_flows.py::test_wrong_password_is_generic_and_audited`. Measured: it adds no server line, so the count is still 4.
+
 ## Dependency Upgrades (ADR 0005)
 
 - **Wait 7 days after a release before a manual upgrade.** Dependabot applies the same cooldown to automatic PRs. Security advisories are not delayed.
