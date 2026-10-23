@@ -631,6 +631,27 @@ If the SELECT policy hides the row, the DELETE matches zero rows and raises no e
 We hit this in Step 2a. The worker could read only `queued` and `processing` bytes, so its DELETE on a `purging` blob removed nothing.
 Two tests caught it. The fix widened the worker's SELECT to `purging`, the one status the purge needs. The rule is in ADR 0018 (amendment).
 
+## Session 4 (Step 4 and CI): plain words
+
+### An error-looking log line that is expected
+PostgreSQL writes a `FATAL` line for every refused login. Our tests make some logins with wrong passwords on purpose, to prove the refusal works. So the CI log shows four `password authentication failed` lines, and the job still passes.
+
+Before we accepted them, we checked three things. The four lines match the four deliberate tests by role. The count is the same when we run those tests locally. A leaked connection would show up at other times, or with a password that was valid earlier, and neither happened.
+
+We kept the lines and documented them in RUNBOOK ("Expected server log lines in backend-db"). Hiding them would mean lowering the server log level, which would also hide real failures.
+
+**Q: The CI log shows "password authentication failed". Is that a security incident?**
+A: Not if the lines match the documented list. A refused login is the server doing its job. The question to ask is whether the count, the roles and the times match what the tests should produce.
+
+**Q: Why not turn off the logging to make the CI log clean?**
+A: The log is the evidence that refusals happen. Lowering the level hides real problems too, and one missing line would go unnoticed. A noisy but correct log is safer than a quiet, misleading one.
+
+**Q: How did you tell an expected line from a leaked connection?**
+A: I counted the server's `FATAL` lines before and after running only the four tests, locally. The difference was exactly four, with the same roles as CI. I did not guess from the timestamps.
+
+**Q: Why keep tests that fail on purpose?**
+A: A login check that never fails proves nothing. The negative tests show that a wrong password is refused, which is the security property. Removing them would make the suite greener and weaker.
+
 **Q: Why did the purge DELETE silently do nothing?**
 A: A DELETE only acts on rows it can see through a SELECT policy. The worker's SELECT excluded `purging` rows, so the DELETE found none. Postgres reports "0 rows", not an error. This is why every write path must check its row count (ADR 0011).
 
