@@ -37,16 +37,16 @@ The chunks table stores `embedding vector(384)` and a generated `tsvector`. Whet
 
 **Input to the Session 5 decision:** the `tsvector` uses PostgreSQL's English configuration (stemming and stop words for English). Keyword search with that configuration will not match Roman Urdu or Urdu script. Keyword-only retrieval cannot answer those questions, so Session 5 must not rely on it for them.
 
-### 4. Hosting requirement: about 1 GB RAM per process
+### 4. Hosting requirement: about 1.1 GB RAM per process
 
 Measured in one process per model on Windows (peak working set):
 
 | Use | Measured | Requirement |
 |---|---|---|
-| Web app loads the model to embed a question | 923 MiB | at least 1 GB free for the web process |
-| Worker loads the model to embed chunks | about 1,050 MiB peak | at least 1 GB free for the worker process |
+| Web app loads the model and embeds a question | 1,123 MiB peak (same-condition measurement, 2026-10-23) | at least 1.2 GB free for the web process |
+| Worker loads the model and embeds chunks | about 1,123 MiB peak (the load peak; embedding adds nothing measurable) | at least 1.2 GB free for the worker process |
 
-**Hosting requirement:** the web app and the worker each need about 1 GB of RAM. Free tiers with 512 MB cannot host this model. Any future host must be checked against this number before it is chosen.
+**Hosting requirement:** the web app and the worker each need about 1.1 GB of RAM (measured 1,123 MiB). Free tiers with 512 MB cannot host this model. Any future host must be checked against this number before it is chosen.
 
 ### 5. ONNX memory tuning: later
 
@@ -95,7 +95,7 @@ Roman Urdu is only partly handled: e5-small finds two of three questions in the 
 ## Consequences
 
 - **Positive:** MIT licence, 384 dimensions, multilingual model, measured query latency of about 26 ms.
-- **Negative:** about 1 GB RAM per process. Free hosting tiers with 512 MB cannot run the app or the worker. The model file is a 0.47 GB download.
+- **Negative:** about 1.1 GB RAM per process. Free hosting tiers with 512 MB cannot run the app or the worker. The model file is a 0.47 GB download.
 - **Negative:** the evaluation is small (45 expected pairs). Model choice may need revisiting when more real questions exist.
 - **Negative:** the Urdu examples are written by the assistant and not reviewed by a native speaker.
 - **Dependency:** onnxruntime and tokenizers, see the amendment below.
@@ -117,4 +117,4 @@ Roman Urdu is only partly handled: e5-small finds two of three questions in the 
 
 **Session settings** (measured, `docs/EVAL.md`, "Runtime change"): 2 intra-op threads, one inter-op thread, the memory arena off, memory pattern off. On the S1 chunks, two threads with the arena off was the fastest configuration. The peak working set was the same for every configuration tried.
 
-**Cost.** Peak working set, one process: about 972 MiB after loading the model and during embedding (fastembed: 923 MiB after load, 1,048 MiB at peak). The ~1 GB per process requirement in decision 4 still holds.
+**Cost.** Same-condition measurement (2026-10-23): one process, peak working set 1,123 MiB after loading the model (fastembed 0.9.0: 897 MiB). The gap is 226 MiB. It is not caused by padding, graph optimisation, memory pattern, the arena or the thread count (`docs/EVAL.md`, "Runtime change"). It is accepted, and the hosting requirement in decision 4 is about 1.1 GB per process. The first figures in this amendment came from different runs and are withdrawn.

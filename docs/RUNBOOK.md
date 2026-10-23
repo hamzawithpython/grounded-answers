@@ -687,7 +687,7 @@ $env:WORKER_EMBEDDING_MODEL_DIR = "$env:LOCALAPPDATA\grounded-answers\models\614
 $env:WORKER_PROCESSING_LEASE_SECONDS = "1200"
 ```
 
-**3. Start the worker.** It refuses to start, with a clear message, if `WORKER_EMBEDDING_MODEL_DIR` is unset or a model file is missing or changed. It loads the model once, at startup. One worker process needs about 1 GB of RAM for the model.
+**3. Start the worker.** It refuses to start, with a clear message, if `WORKER_EMBEDDING_MODEL_DIR` is unset or a model file is missing or changed. It loads the model once, at startup. One worker process needs about 1.1 GB of RAM for the model.
 
 ```powershell
 uv run --directory backend python -m grounded_answers.jobs.worker
@@ -704,5 +704,5 @@ uv run --directory backend python -m grounded_answers.jobs.worker
 The chunks table needs the pgvector extension, and the embedding model runs inside the web app and the worker. Check these before go-live and record each result in SECURITY.md.
 
 1. **Enable pgvector.** The bootstrap SQL runs `CREATE EXTENSION IF NOT EXISTS vector` in each database. Confirm the host offers pgvector and that the extension is created, then confirm the version: `SELECT extversion FROM pg_extension WHERE extname = 'vector';`.
-2. **Memory per process.** The web app and the worker each load the embedding model, about 1 GB of RAM per process (measured: 923 MiB to embed a question, about 1,050 MiB peak to embed chunks). A host with 512 MB of RAM cannot run either process.
+2. **Memory per process.** The web app and the worker each load the embedding model, about 1.1 GB of RAM per process (measured 2026-10-23 in the same conditions: 1,123 MiB peak). A host with 512 MB of RAM cannot run either process.
 3. **Model files present at build time.** The pinned model is fetched once at build or deploy into the fixed cache directory. Production never downloads at startup. Confirm the image contains the files before the first start.

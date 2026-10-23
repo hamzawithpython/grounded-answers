@@ -7,7 +7,7 @@ Dependency and tooling changes are listed here too.
 
 ### Documentation
 - ADR 0021: embedding model (multilingual-e5-small, MIT, 384 dimensions, with `passage:` / `query:` prefixes) and
-  chunking (section-aware, about 1,200 characters, tables whole). Records the hosting requirement (about 1 GB RAM per
+  chunking (section-aware, about 1,200 characters, tables whole). Records the hosting requirement (about 1.1 GB RAM per
   process), the pinned offline model, the English-config keyword limitation for Roman Urdu, and pgvector enablement.
 - `docs/EVAL.md`: retrieval evaluation method and results (45 expected clause pairs, three chunking strategies,
   keyword and vector rankers, query-time cost, a six-question Urdu mini-test).

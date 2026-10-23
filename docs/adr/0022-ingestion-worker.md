@@ -94,7 +94,7 @@ The evaluation (ADR 0021, `docs/EVAL.md`) embedded chunks with the document iden
 ## Consequences
 
 - **Positive:** a crash or a lost lease can never leave a half-written set of chunks or a second one. The model is reproducible and checked.
-- **Negative:** one worker process needs about 1 GB of RAM for the model (ADR 0021). A hard-killed worker leaves a version in `processing` until Step 7 (D5).
+- **Negative:** one worker process needs about 1.1 GB of RAM for the model (ADR 0021). A hard-killed worker leaves a version in `processing` until Step 7 (D5).
 - **Negative:** a version that fails after its retries stays `failed` until someone re-enqueues it. Re-enqueueing is manual until Step 7.
 - **Negative:** the embedding text differs from the evaluated text (see above).
 - **Operational:** the worker needs `WORKER_EMBEDDING_MODEL_DIR` set (docs/RUNBOOK.md). Upload stays off (`UPLOAD_ENABLED`) until Step 8, because a running worker processes any queued job.

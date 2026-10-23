@@ -91,19 +91,52 @@ Scratch scripts: extraction (`extract_all.py`), chunking (`chunks.py`), embeddin
 
 fastembed 0.9.0 caps pillow below 13.0, and pillow 12.3.0 carries 35 advisories that 13.0.0 fixes (ADR 0021, amendment). The embedder now runs the same model through onnxruntime 1.31.0 and tokenizers 0.23.3, with the same prefixes, truncation, mean pooling and normalisation.
 
-**Equivalence against fastembed** (same texts, reference vectors from fastembed 0.9.0, 40 questions and 829 chunks):
+### Equivalence against fastembed
 
-| Check | Result |
-|---|---|
-| Cosine similarity, queries (minimum / mean) | 1.0 / 1.0 |
-| Cosine similarity, chunks S1 (190, minimum / mean) | 0.99999988 / 1.0 |
-| Cosine similarity, chunks S2 (384) | 0.99999988 / 1.0 |
-| Cosine similarity, chunks S3 (255) | 0.99999988 / 1.0 |
-| Retrieval S1: recall@5 / MRR | 0.778 / 0.633 (same as fastembed) |
-| Retrieval S2: recall@5 / MRR | 0.778 / 0.605 (same as fastembed) |
-| Retrieval S3: recall@5 / MRR | 0.756 / 0.587 (same as fastembed) |
+Reference vectors from fastembed 0.9.0, for the same texts (829 chunks, 40 questions).
 
-**Session settings.** Four configurations, each in its own process, embedding the 190 S1 chunks:
+| Set | n | Min cosine | Mean cosine | Max cosine |
+|---|---|---|---|---|
+| Queries | 40 | 1.0 | 1.0 | 1.00000012 |
+| Passages S1 | 190 | 0.99999988 | 1.0 | 1.00000024 |
+| Passages S2 | 384 | 0.99999988 | 1.0 | 1.00000024 |
+| Passages S3 | 255 | 0.99999988 | 1.0 | 1.00000024 |
+
+Retrieval on the same 45 expected pairs is identical to the fastembed figures: S1 recall@5 0.778, MRR 0.633; S2 0.778 and 0.605; S3 0.756 and 0.587.
+
+### Memory and latency in the same conditions (2026-10-23)
+
+One process each. Each process loads the corpus first, then the model, then embeds the 40 questions one at a time after one warm-up.
+
+| Embedder | Peak working set after load (MiB) | Mean query (ms) | Median (ms) | p95 (ms) | Max (ms) |
+|---|---|---|---|---|---|
+| New (onnxruntime 1.31.0, tokenizers 0.23.3) | 1,123 | 41.0 | 32 | 78 | 94 |
+| fastembed 0.9.0 | 897 | 35.2 | 31 | 63 | 78 |
+
+The new embedder uses 226 MiB (25%) more RAM. Its median query time matches fastembed's, and its tail is slower.
+
+### Investigation (timeboxed, 2026-10-23)
+
+**Padding.** The tokenizer pads each batch to its longest sequence, as fastembed does (checked: two inputs of 27 tokens each after padding). No change is needed.
+
+**Session options.** One process per row, the same 40 questions.
+
+| Threads | Memory arena | Memory pattern | Graph optimisation | Peak after load (MiB) | Mean (ms) | Median (ms) | p95 (ms) |
+|---|---|---|---|---|---|---|---|
+| 2 | off | off | all (current) | 1,121.9 | 30.5 | 31 | 47 |
+| 2 | off | on | all | 1,122.8 | 30.8 | 31 | 63 |
+| 2 | on | on | all | 1,123.1 | 20.3 | 16 | 31 |
+| default | on | on | all | 1,123.3 | 22.3 | 16 | 47 |
+| default | on | on | basic | 1,122.8 | 34.4 | 31 | 63 |
+| 2 | off | off | basic | 1,123.0 | 29.7 | 31 | 47 |
+
+Peak RAM stays at about 1,122 MiB whatever the options are. So the gap is not caused by these settings. The memory arena on gives faster single queries (median 16 ms), but slower batch indexing (see below), so the current settings stay.
+
+**Conclusion.** The gap is not closed. The hosting requirement is about 1.1 GB per process, and the figures in this section replace the earlier ones.
+
+**Withdrawn.** Earlier figures in this document and in ADR 0021 compared a new-embedder run with fastembed figures from a different run. That comparison is invalid. The same-condition figures above replace them.
+
+### Batch indexing, session settings (190 S1 chunks, earlier measurement)
 
 | Intra-op threads | Memory arena | Time (s) | Peak working set (MiB) |
 |---|---|---|---|
@@ -112,6 +145,4 @@ fastembed 0.9.0 caps pillow below 13.0, and pillow 12.3.0 carries 35 advisories 
 | 4 | off | 78.8 | 1,123.7 |
 | 2 | on | 126.0 | 1,123.3 |
 
-The chosen setting is 2 threads, arena off. The peak figures in this table include the corpus loaded earlier in the same process, so compare them only with each other. Against fastembed, in the separate measurement above: loading and embedding peaked at about 972 MiB for the new loader, against 923 MiB after load and 1,048 MiB at peak for fastembed.
-
-**Query time** with the new loader: 23.4 ms mean per question (fastembed: 25.8 ms, same machine).
+The peak figures in this table include the corpus loaded earlier in the same process. Compare them only with each other. The current setting, 2 threads with the arena off, is the fastest for indexing. The single-query median is faster with the arena on.
