@@ -5,6 +5,7 @@ the model from its cache there. It never skips: a missing model directory is a f
 Set TEST_EMBEDDING_MODEL_DIR to the revision directory that `python -m grounded_answers.embedding.fetch` prints.
 """
 
+import logging
 import math
 import os
 from pathlib import Path
@@ -12,7 +13,8 @@ from pathlib import Path
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
 
-from grounded_answers.embedding.model import PinnedEmbedder
+from grounded_answers.embedding.model import PinnedEmbedder, load_embedder
+from grounded_answers.embedding.pinned import MODEL_NAME, MODEL_REVISION
 from grounded_answers.models import EMBEDDING_DIMENSIONS
 
 pytestmark = pytest.mark.db
@@ -60,3 +62,22 @@ def test_the_model_ranks_the_relevant_passage_above_an_unrelated_one(
         ["Probation is six months for drivers.", "Overtime is paid at two times the hourly rate."]
     )
     assert _cosine(query, relevant) > _cosine(query, unrelated)
+
+
+def test_loading_the_model_logs_one_line_with_the_revision_and_the_load_time(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The startup line (ADR 0022, D6): model name, pinned revision and load time. No path, no document data."""
+    caplog.set_level(logging.INFO, logger="grounded_answers.embedding")
+    model_dir = _model_dir()
+    load_embedder(model_dir)
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("worker.model_loaded ")
+    ]
+    assert len(lines) == 1
+    assert f"model={MODEL_NAME}" in lines[0]
+    assert f"revision={MODEL_REVISION}" in lines[0]
+    assert "load_ms=" in lines[0]
+    assert str(model_dir) not in lines[0]

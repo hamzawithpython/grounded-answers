@@ -13,6 +13,8 @@ is missing or does not match its hash. Nothing is downloaded here: fetch.py does
 Input text is never logged.
 """
 
+import logging
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final, Protocol
@@ -25,6 +27,8 @@ from grounded_answers.embedding.hashing import sha256_file
 from grounded_answers.embedding.pinned import (
     BATCH_SIZE,
     MODEL_FILE,
+    MODEL_NAME,
+    MODEL_REVISION,
     PASSAGE_PREFIX,
     PINNED_FILES,
     QUERY_PREFIX,
@@ -35,6 +39,9 @@ MAX_TOKENS: Final = 512
 # ONNX Runtime threads for one inference call. The value is set from the measurement in docs/EVAL.md.
 INTRA_OP_THREADS: Final = 2
 _PAD_SYMBOL: Final = "<pad>"
+
+
+logger = logging.getLogger(__name__)
 
 
 class ModelIntegrityError(RuntimeError):
@@ -120,3 +127,17 @@ class PinnedEmbedder:
     def query_embedding(self, text: str) -> list[float]:
         """Used by Session 5's query path. Same model, the query prefix."""
         return self._embed([QUERY_PREFIX + text])[0]
+
+
+def load_embedder(model_dir: Path) -> PinnedEmbedder:
+    """Verify and load the model, then log one line. Called once at worker startup (ADR 0022, D6).
+
+    The line names the model and its pinned revision, and the load time. It holds no file path and no document data.
+    """
+    started = time.monotonic()
+    embedder = PinnedEmbedder(model_dir)
+    load_ms = round((time.monotonic() - started) * 1000)
+    logger.info(
+        "worker.model_loaded model=%s revision=%s load_ms=%d", MODEL_NAME, MODEL_REVISION, load_ms
+    )
+    return embedder
