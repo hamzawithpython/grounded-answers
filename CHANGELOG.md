@@ -6,6 +6,12 @@ Dependency and tooling changes are listed here too.
 ## [Unreleased]
 
 ### Documentation
+- ADR 0021: embedding model (multilingual-e5-small, MIT, 384 dimensions, with `passage:` / `query:` prefixes) and
+  chunking (section-aware, about 1,200 characters, tables whole). Records the hosting requirement (about 1 GB RAM per
+  process), the pinned offline model, the English-config keyword limitation for Roman Urdu, and pgvector enablement.
+- `docs/EVAL.md`: retrieval evaluation method and results (45 expected clause pairs, three chunking strategies,
+  keyword and vector rankers, query-time cost, a six-question Urdu mini-test).
+- `docs/RUNBOOK.md`: hosting checklist for vector search (enable pgvector, memory per process, model files at build time).
 - `docs/SECURITY.md`: threat model (assets, actors, trust boundaries, 24 threats with status and proving test),
   tenant-isolation layers, secrets table, backups after purge (ADR 0007), residual risks R1–R9.
 - `docs/RUNBOOK.md`: health and readiness (ADR 0009); Session 2 bootstrap problems; rollback rule and
