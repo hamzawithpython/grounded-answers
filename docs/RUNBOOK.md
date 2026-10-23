@@ -666,10 +666,43 @@ Document bytes are stored in the database (`document_blobs`), so the host must b
 3. **Encryption at rest.** Confirm the host encrypts the database disks. The application does not encrypt the bytes.
 4. **Scale-up trigger.** When the database storage or backup size approaches the limit, the recorded next step is a move to object storage (Backblaze B2 is the first candidate, ADR 0018). That is a new ADR.
 
+### Embedding model files and the worker (ADR 0022)
+
+The worker and the database tests need the pinned model files. Production never downloads them at startup.
+
+**1. Fetch and verify the model** (once per machine, or at image build). It downloads only missing files, checks every file's SHA-256 and size, and fails loudly on a mismatch. A file already in the cache is never replaced.
+
+```powershell
+uv run --directory backend python -m grounded_answers.embedding.fetch "$env:LOCALAPPDATA\grounded-answers\models"
+```
+
+Expect `model ready: ...\614241f622f53c4eeff9890bdc4f31cfecc418b3` and exit code 0. If it says `does not match its pin`, delete that folder and run the command again. Do not edit the files by hand: a changed file is a changed model.
+
+**2. Set the worker's settings** in the shell, not in a file (ADR 0017):
+
+```powershell
+$env:WORKER_DATABASE_URL = "postgresql://worker_user:<password>@127.0.0.1:5432/grounded_answers"
+$env:WORKER_EMBEDDING_MODEL_DIR = "$env:LOCALAPPDATA\grounded-answers\models\614241f622f53c4eeff9890bdc4f31cfecc418b3"
+# Optional. Default 1200 seconds (20 minutes); allowed 120 to 7200.
+$env:WORKER_PROCESSING_LEASE_SECONDS = "1200"
+```
+
+**3. Start the worker.** It refuses to start, with a clear message, if `WORKER_EMBEDDING_MODEL_DIR` is unset or a model file is missing or changed. It loads the model once, at startup. One worker process needs about 1.1 GB of RAM for the model.
+
+```powershell
+uv run --directory backend python -m grounded_answers.jobs.worker
+```
+
+**Do not start the worker against a database with queued uploads until Step 8.** Upload stays off (`UPLOAD_ENABLED=false`), but any job already queued runs as soon as the worker starts.
+
+**Dev database, migration `0009_ingestion_lease`.** No bootstrap change in this step. Run `alembic upgrade head` (see "Migrations to head" above). The readiness check expects `0009_ingestion_lease`, so `/ready` returns 503 until the migration has run.
+
+**Tests.** The `backend-db` job restores the model from its cache and sets `TEST_EMBEDDING_MODEL_DIR`. Locally, set it to the directory from step 1 before `pytest -m db`. The real-model test fails, and never skips, when it is unset (ADR 0006).
+
 ### Hosting checklist for vector search (ADR 0021)
 
 The chunks table needs the pgvector extension, and the embedding model runs inside the web app and the worker. Check these before go-live and record each result in SECURITY.md.
 
 1. **Enable pgvector.** The bootstrap SQL runs `CREATE EXTENSION IF NOT EXISTS vector` in each database. Confirm the host offers pgvector and that the extension is created, then confirm the version: `SELECT extversion FROM pg_extension WHERE extname = 'vector';`.
-2. **Memory per process.** The web app and the worker each load the embedding model, about 1 GB of RAM per process (measured: 923 MiB to embed a question, about 1,050 MiB peak to embed chunks). A host with 512 MB of RAM cannot run either process.
+2. **Memory per process.** The web app and the worker each load the embedding model, about 1.1 GB of RAM per process (measured 2026-10-23 in the same conditions: 1,123 MiB peak). A host with 512 MB of RAM cannot run either process.
 3. **Model files present at build time.** The pinned model is fetched once at build or deploy into the fixed cache directory. Production never downloads at startup. Confirm the image contains the files before the first start.

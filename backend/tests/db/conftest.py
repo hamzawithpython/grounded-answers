@@ -33,6 +33,7 @@ from grounded_answers.scram import build_verifier
 from .auth_support import accounts, client  # noqa: F401 - fixtures for the auth HTTP tests
 from .database import LOGIN_ROLES, DbHandle
 from .guard import TEST_DB_NAME, check_targets
+from .ingest_support import admin, made  # noqa: F401 - fixtures for the ingestion tests
 from .psql import run_sql_file
 from .seed import Seeded, seed
 
@@ -70,15 +71,15 @@ def grounded_db() -> Iterator[DbHandle]:
     psql = shlex.split(_required_env("PSQL_COMMAND"))
     check_targets(admin_url, _dev_urls())
 
-    with psycopg.connect(admin_url, autocommit=True) as admin:
-        admin.execute(
+    with psycopg.connect(admin_url, autocommit=True) as bootstrap:
+        bootstrap.execute(
             sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(TEST_DB_NAME))
         )
-        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(TEST_DB_NAME)))
+        bootstrap.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(TEST_DB_NAME)))
 
     passwords = {role: secrets.token_urlsafe(24) for role in LOGIN_ROLES}
-    with psycopg.connect(admin_url) as admin:
-        verifiers = {role: build_verifier(admin, role, pw) for role, pw in passwords.items()}
+    with psycopg.connect(admin_url) as bootstrap:
+        verifiers = {role: build_verifier(bootstrap, role, pw) for role, pw in passwords.items()}
 
     env = dict(os.environ)
     for role, verifier in verifiers.items():

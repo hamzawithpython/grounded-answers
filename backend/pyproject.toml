@@ -12,6 +12,8 @@ dependencies = [
     "cryptography>=50.0.2",
     "fastapi>=0.158.1",
     "markdown-it-py==4.2.0",
+    "numpy==2.5.4",
+    "onnxruntime==1.31.0",
     "procrastinate==3.10.0",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.16.1",
@@ -21,6 +23,7 @@ dependencies = [
     "python-multipart==0.0.32",
     "redis>=8.1.0",
     "sqlalchemy[asyncio]>=2.1.5",
+    "tokenizers==0.23.3",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -80,3 +83,7 @@ strict = true
 show_error_codes = true
 # Enable pydantic plugin for better type checking of pydantic-settings
 plugins = ["pydantic.mypy"]
+
+[tool.uv]
+# huggingface-hub 2.3.0 was uploaded on 2026-10-23, inside the one-week cooldown (ADR 0005). tokenizers n# accepts 1.x, so pin 1.33.0 until 2.x is older than a week. Remove this line then.
+constraint-dependencies = ["huggingface-hub==1.33.0"]

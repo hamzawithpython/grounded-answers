@@ -107,8 +107,9 @@ class _PostgresHarness:
             """
             INSERT INTO grounded.document_versions (
               id, tenant_id, document_id, version_no, original_filename, content_type,
-              size_bytes, sha256, storage_key, status, created_by, retired_at, purge_after
-            ) VALUES (%s, %s, %s, 1, 'c.txt', 'text/plain', 16, %s, %s, %s, %s, %s, %s)
+              size_bytes, sha256, storage_key, status, created_by, retired_at, purge_after,
+              processing_started_at, processing_token
+            ) VALUES (%s, %s, %s, 1, 'c.txt', 'text/plain', 16, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 version,
@@ -124,9 +125,9 @@ class _PostgresHarness:
 
     def set_status(self, tenant: TenantSeed, version: uuid.UUID, status: str) -> None:
         self._admin.execute(
-            "UPDATE grounded.document_versions SET status = %s, retired_at = %s, purge_after = %s "
-            "WHERE id = %s",
-            (status, *self._retired_columns(status), version),
+            "UPDATE grounded.document_versions SET status = %s, retired_at = %s, purge_after = %s, "
+            "processing_started_at = %s, processing_token = %s WHERE id = %s",
+            (status, *self._retired_columns(status), *self._lease_columns(status), version),
         )
 
     def bytes_present(self, tenant: TenantSeed, version: uuid.UUID) -> bool:
@@ -174,7 +175,14 @@ class _PostgresHarness:
     @classmethod
     def _status_columns(cls, status: str, tenant: TenantSeed) -> tuple[Any, ...]:
         retired_at, purge_after = cls._retired_columns(status)
-        return (status, tenant.admin, retired_at, purge_after)
+        return (status, tenant.admin, retired_at, purge_after, *cls._lease_columns(status))
+
+    @staticmethod
+    def _lease_columns(status: str) -> tuple[Any, ...]:
+        """A processing version carries a lease (migration 0009); other statuses carry none."""
+        if status != "processing":
+            return (None, None)
+        return (datetime.now(UTC), uuid.uuid4())
 
 
 @asynccontextmanager

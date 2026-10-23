@@ -87,8 +87,9 @@ def _version(
         """
         INSERT INTO grounded.document_versions (
           id, tenant_id, document_id, version_no, original_filename, content_type,
-          size_bytes, sha256, storage_key, status, created_by, retired_at, purge_after
-        ) VALUES (%s, %s, %s, 1, 'b.txt', 'text/plain', 16, %s, %s, %s, %s, %s, %s)
+          size_bytes, sha256, storage_key, status, created_by, retired_at, purge_after,
+          processing_started_at, processing_token
+        ) VALUES (%s, %s, %s, 1, 'b.txt', 'text/plain', 16, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             version,
@@ -100,6 +101,8 @@ def _version(
             creator,
             now if retired else None,
             now + timedelta(days=30) if retired else None,
+            now if status == "processing" else None,
+            uuid.uuid4() if status == "processing" else None,
         ),
     )
     made.versions.append(version)

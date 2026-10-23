@@ -21,8 +21,8 @@ Urdu answers are planned for v2 (SPEC §6.2). Some users may ask in Roman Urdu o
 - **Licence:** MIT (model card, checked 2026-10-23).
 - **Dimension:** 384. Well under pgvector's HNSW limit of 2,000 for `vector` (pgvector README, checked 2026-10-23).
 - **Prefixes:** `passage: ` on every chunk, `query: ` on every question. Both are required by the model card and were used in the evaluation.
-- **Runtime:** not in fastembed 0.9.0's model list. It is registered as a custom model from the official repository, `intfloat/multilingual-e5-small`, using its `onnx/model.onnx` (fp32, 448.5 MiB), with mean pooling and normalisation. The model download is about 0.47 GB.
-- **Dependency (not yet added):** `fastembed` 0.9.0 (Apache-2.0) with `onnxruntime` (MIT) and `tokenizers` (Apache-2.0). It needs your approval when the code step starts. Alternative: call `onnxruntime` and `tokenizers` directly, which removes fastembed's dependency tree but means writing the pooling and prefix code ourselves.
+- **Runtime:** onnxruntime 1.31.0 (MIT) runs the model, and tokenizers 0.23.3 (Apache-2.0) splits the text. Both are used directly (amendment below). The model is the official `intfloat/multilingual-e5-small`, from its `onnx/model.onnx` (fp32, 448.5 MiB). The model download is about 0.47 GB.
+- **Dependency:** resolved by the amendment below. No fastembed.
 
 ### 2. Chunking: section-aware, about 1,200 characters, tables whole (strategy S1)
 
@@ -37,16 +37,16 @@ The chunks table stores `embedding vector(384)` and a generated `tsvector`. Whet
 
 **Input to the Session 5 decision:** the `tsvector` uses PostgreSQL's English configuration (stemming and stop words for English). Keyword search with that configuration will not match Roman Urdu or Urdu script. Keyword-only retrieval cannot answer those questions, so Session 5 must not rely on it for them.
 
-### 4. Hosting requirement: about 1 GB RAM per process
+### 4. Hosting requirement: about 1.1 GB RAM per process
 
 Measured in one process per model on Windows (peak working set):
 
 | Use | Measured | Requirement |
 |---|---|---|
-| Web app loads the model to embed a question | 923 MiB | at least 1 GB free for the web process |
-| Worker loads the model to embed chunks | about 1,050 MiB peak | at least 1 GB free for the worker process |
+| Web app loads the model and embeds a question | 1,123 MiB peak (same-condition measurement, 2026-10-23) | at least 1.2 GB free for the web process |
+| Worker loads the model and embeds chunks | about 1,123 MiB peak (the load peak; embedding adds nothing measurable) | at least 1.2 GB free for the worker process |
 
-**Hosting requirement:** the web app and the worker each need about 1 GB of RAM. Free tiers with 512 MB cannot host this model. Any future host must be checked against this number before it is chosen.
+**Hosting requirement:** the web app and the worker each need about 1.1 GB of RAM (measured 1,123 MiB). Free tiers with 512 MB cannot host this model. Any future host must be checked against this number before it is chosen.
 
 ### 5. ONNX memory tuning: later
 
@@ -95,10 +95,10 @@ Roman Urdu is only partly handled: e5-small finds two of three questions in the 
 ## Consequences
 
 - **Positive:** MIT licence, 384 dimensions, multilingual model, measured query latency of about 26 ms.
-- **Negative:** about 1 GB RAM per process. Free hosting tiers with 512 MB cannot run the app or the worker. The model file is a 0.47 GB download.
+- **Negative:** about 1.1 GB RAM per process. Free hosting tiers with 512 MB cannot run the app or the worker. The model file is a 0.47 GB download.
 - **Negative:** the evaluation is small (45 expected pairs). Model choice may need revisiting when more real questions exist.
 - **Negative:** the Urdu examples are written by the assistant and not reviewed by a native speaker.
-- **Dependency:** `fastembed` and its tree need approval at the code step (decision 1).
+- **Dependency:** onnxruntime and tokenizers, see the amendment below.
 - **pgvector is not enabled yet.** No migration or bootstrap script creates the `vector` extension (checked 2026-10-23: the only `CREATE EXTENSION` in the repository is for `plpgsql`). The container image ships pgvector, but the extension must be created in each database. The bootstrap SQL will run `CREATE EXTENSION IF NOT EXISTS vector` (idempotent), and "enable pgvector" is on the hosting checklist (RUNBOOK).
 - **Model files are fixed at build time.** Production runs offline: the pinned model is fetched once at build or deploy into a fixed cache directory, never at startup. A startup test fails with a clear message if the files are missing or do not match the pinned revision.
 
@@ -106,3 +106,15 @@ Roman Urdu is only partly handled: e5-small finds two of three questions in the 
 
 - ADR 0018 (document bytes in PostgreSQL, and the migration rule for widened access)
 - ADR 0020 (text extraction, which produces the sections this ADR chunks)
+
+## Amendment (2026-10-23): onnxruntime and tokenizers instead of fastembed
+
+**Why.** fastembed 0.9.0, the latest release, caps pillow below 13.0. Pillow 12.3.0, which fastembed brought in, carries 35 advisories, all fixed in 13.0.0 (pip-audit in CI). We never process images, so pillow is not needed, but the CI check is strict and cannot be disabled.
+
+**What changed.** The model runs through onnxruntime 1.31.0 (MIT, uploaded 2026-10-09). The text is split by tokenizers 0.23.3 (Apache-2.0, uploaded 2026-10-09). numpy 2.5.4 (BSD-3-Clause) is declared directly. fastembed is removed. The loader keeps the same steps as the model card: the "passage: " or "query: " prefix, truncation at 512 tokens, attention-masked mean pooling, and L2 normalisation.
+
+**Equivalence.** Measured on the 829 chunks of the evaluation and the 40 questions, against fastembed's vectors for the same texts: minimum cosine similarity 0.99999988, mean 1.0. Retrieval on the owner's 40 questions is unchanged: S1 recall@5 0.778 and MRR 0.633, S2 0.778 and 0.605, S3 0.756 and 0.587.
+
+**Session settings** (measured, `docs/EVAL.md`, "Runtime change"): 2 intra-op threads, one inter-op thread, the memory arena off, memory pattern off. On the S1 chunks, two threads with the arena off was the fastest configuration. The peak working set was the same for every configuration tried.
+
+**Cost.** Same-condition measurement (2026-10-23): one process, peak working set 1,123 MiB after loading the model (fastembed 0.9.0: 897 MiB). The gap is 226 MiB. It is not caused by padding, graph optimisation, memory pattern, the arena or the thread count (`docs/EVAL.md`, "Runtime change"). It is accepted, and the hosting requirement in decision 4 is about 1.1 GB per process. The first figures in this amendment came from different runs and are withdrawn.
