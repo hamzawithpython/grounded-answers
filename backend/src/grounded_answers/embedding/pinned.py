@@ -12,7 +12,7 @@ from typing import Final
 MODEL_NAME: Final = "intfloat/multilingual-e5-small"
 MODEL_REVISION: Final = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
 MODEL_LICENCE: Final = "MIT"
-# The model file, relative to the model directory. fastembed reads this path.
+# The model file, relative to the model directory. onnxruntime loads this path.
 MODEL_FILE: Final = "onnx/model.onnx"
 
 # The e5 model card requires these prefixes on every input (ADR 0021).

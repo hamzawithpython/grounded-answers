@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
 
-from grounded_answers.embedding.model import FastEmbedder
+from grounded_answers.embedding.model import PinnedEmbedder
 from grounded_answers.models import EMBEDDING_DIMENSIONS
 
 pytestmark = pytest.mark.db
@@ -40,7 +40,7 @@ def test_the_pinned_model_gives_normalised_vectors_of_the_stored_size_offline(
     monkeypatch.setenv(
         "HF_HUB_OFFLINE", "1"
     )  # any attempt to download fails here, not in production
-    embedder = FastEmbedder(_model_dir())
+    embedder = PinnedEmbedder(_model_dir())
     vectors = embedder.embed_passages(
         ["Probation is six months.", "Overtime is paid at two times the rate."]
     )
@@ -54,7 +54,7 @@ def test_the_model_ranks_the_relevant_passage_above_an_unrelated_one(
     monkeypatch: MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    embedder = FastEmbedder(_model_dir())
+    embedder = PinnedEmbedder(_model_dir())
     query = embedder.query_embedding("How long is the probation period?")
     relevant, unrelated = embedder.embed_passages(
         ["Probation is six months for drivers.", "Overtime is paid at two times the hourly rate."]

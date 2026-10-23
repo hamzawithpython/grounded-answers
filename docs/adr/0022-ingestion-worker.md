@@ -56,7 +56,7 @@ ADR 0020 mapped every extraction failure to one of four reasons. The embedding m
 
 ### D6. Model loaded once per worker process
 
-- The worker loads the model at startup and refuses to start if a pinned file is missing or does not match its hash (`FastEmbedder`, `verify_model_dir`).
+- The worker loads the model at startup and refuses to start if a pinned file is missing or does not match its hash (`PinnedEmbedder`, `verify_model_dir`).
 - Inference runs in batches of 8, in a thread, so the event loop stays responsive.
 - Production runs offline. The model is fetched once, at build or deploy, by `python -m grounded_answers.embedding.fetch <cache>`.
 
@@ -65,7 +65,7 @@ ADR 0020 mapped every extraction failure to one of four reasons. The embedding m
 - The revision is pinned to a Hugging Face commit (`MODEL_REVISION`). Each file is pinned by SHA-256 and size (`PINNED_FILES`).
 - The fetch step downloads a file only when it is missing. It hashes the download before keeping it. A file that is already in the cache is never replaced: it is checked, and a mismatch fails loudly.
 - CI restores a cache keyed by the revision, then runs the fetch step, so a corrupted or tampered cache fails in CI.
-- fastembed 0.9.0 (Apache-2.0) loads the verified directory through `specific_model_path`. Its own downloader is not used, because it has no revision pin.
+- The runtime is onnxruntime and tokenizers, used directly (ADR 0021, amendment). It loads the verified directory and downloads nothing.
 
 ### D8. Transition guard (approved in review)
 
@@ -77,9 +77,9 @@ The policies in D3 cannot express "from queued to processing" or "from processin
 - It follows the pattern of the `updated_at` function: `search_path` pinned, EXECUTE revoked from PUBLIC.
 
 For Step 7, the guard is extended to a per-role table of allowed transitions, so that app_user's replace and delete changes are guarded in the same way.
-## Dependency added
+## Dependencies (amended 2026-10-23)
 
-`fastembed==0.9.0`, approved in ADR 0021 (Apache-2.0, released 2026-10-07, older than the one-week cooldown in ADR 0005). Its transitive dependencies include `onnxruntime` (MIT), `tokenizers` (Apache-2.0) and `huggingface-hub`, all in `uv.lock`.
+`onnxruntime==1.31.0` (MIT, uploaded 2026-10-09), `tokenizers==0.23.3` (Apache-2.0, uploaded 2026-10-09) and `numpy==2.5.4` (BSD-3-Clause), all used directly. `fastembed` was removed: it caps pillow below 13.0, and pillow 12.3.0 carries 35 advisories that 13.0.0 fixes (pip-audit). We never process images. `huggingface-hub` is pinned to 1.33.0 through `[tool.uv] constraint-dependencies`: `tokenizers` pulls it in, the project does not use it, and 2.3.0 was uploaded on 2026-10-23, inside the one-week cooldown (ADR 0005).
 
 ## Embedding text (a difference from the evaluation)
 

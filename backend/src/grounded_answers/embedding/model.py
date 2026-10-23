@@ -1,31 +1,40 @@
 """
-Load the pinned embedding model from a local directory, offline (ADR 0021, ADR 0022 decision D6 and D7).
+Embed text with the pinned model, from a verified local directory, offline (ADR 0021, ADR 0022 D6 and D7).
 
-The model is loaded once per worker process, at startup. Startup fails with a clear message if any pinned
-file is missing or does not match its hash. Nothing is downloaded here: fetch.py does that at build time.
+Runtime: onnxruntime runs the model, and tokenizers splits the text. Nothing else is involved. fastembed was
+replaced in this step because it caps pillow below 13.0, and pillow 12.x carries 35 advisories that the 13.0.0
+release fixes (ADR 0022, amendment of 2026-10-23). We never process images.
+
+The steps match the e5 model card: "passage: " or "query: " prefix, truncation at the model's maximum length,
+attention-masked mean pooling over the last hidden state, then L2 normalisation.
+
+The model is loaded once per worker process, at startup. Startup fails with a clear message if any pinned file
+is missing or does not match its hash. Nothing is downloaded here: fetch.py does that at build time.
 Input text is never logged.
 """
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Final, Protocol
 
-from fastembed import TextEmbedding
-from fastembed.common.model_description import ModelSource, PoolingType
+import numpy as np
+import onnxruntime as ort  # type: ignore[import-untyped]  # onnxruntime ships no stubs (ADR 0022)
+from tokenizers import Tokenizer
 
 from grounded_answers.embedding.hashing import sha256_file
 from grounded_answers.embedding.pinned import (
     BATCH_SIZE,
     MODEL_FILE,
-    MODEL_NAME,
     PASSAGE_PREFIX,
     PINNED_FILES,
     QUERY_PREFIX,
 )
-from grounded_answers.models import EMBEDDING_DIMENSIONS
 
-# fastembed's size estimate for the registry entry. It is informational only.
-_SIZE_IN_GB: float = 0.47
+# The model's maximum input length in tokens (tokenizer_config.json, model_max_length). Longer text is truncated.
+MAX_TOKENS: Final = 512
+# ONNX Runtime threads for one inference call. The value is set from the measurement in docs/EVAL.md.
+INTRA_OP_THREADS: Final = 2
+_PAD_SYMBOL: Final = "<pad>"
 
 
 class ModelIntegrityError(RuntimeError):
@@ -33,7 +42,7 @@ class ModelIntegrityError(RuntimeError):
 
 
 class Embedder(Protocol):
-    """Turns text into vectors. The worker uses passage embeddings; the query path will use query_embedding."""
+    """Turns text into vectors. The worker uses passage embeddings; the query path uses query_embedding."""
 
     def embed_passages(self, texts: Sequence[str]) -> list[list[float]]: ...
 
@@ -48,43 +57,66 @@ def verify_model_dir(directory: Path) -> None:
             raise ModelIntegrityError(f"model file does not match its pin: {relative}")
 
 
-def _register_model() -> None:
-    registered: list[dict[str, Any]] = TextEmbedding.list_supported_models()
-    if any(entry["model"] == MODEL_NAME for entry in registered):
-        return
-    TextEmbedding.add_custom_model(
-        model=MODEL_NAME,
-        pooling=PoolingType.MEAN,
-        normalization=True,
-        sources=ModelSource(hf=MODEL_NAME),
-        dim=EMBEDDING_DIMENSIONS,
-        model_file=MODEL_FILE,
-        size_in_gb=_SIZE_IN_GB,
-    )
+def _session_options() -> ort.SessionOptions:
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = INTRA_OP_THREADS
+    options.inter_op_num_threads = 1
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    # Inputs vary in length, so a fixed memory pattern cannot be reused. The arena is disabled to keep
+    # the resident memory low on a small host; the measurement is in docs/EVAL.md.
+    options.enable_mem_pattern = False
+    options.enable_cpu_mem_arena = False
+    return options
 
 
-class FastEmbedder:
-    """multilingual-e5-small through fastembed, from a verified local directory (offline)."""
+class PinnedEmbedder:
+    """multilingual-e5-small through onnxruntime and tokenizers, from a verified local directory (offline)."""
 
-    def __init__(self, model_dir: Path, *, threads: int | None = None) -> None:
+    def __init__(self, model_dir: Path) -> None:
         verify_model_dir(model_dir)
-        _register_model()
-        self._model = TextEmbedding(
-            model_name=MODEL_NAME, specific_model_path=str(model_dir), threads=threads
+        tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
+        tokenizer.enable_truncation(max_length=MAX_TOKENS)
+        pad_id = tokenizer.token_to_id(_PAD_SYMBOL)
+        if pad_id is None:
+            raise ModelIntegrityError(f"the tokenizer has no {_PAD_SYMBOL} token")
+        tokenizer.enable_padding(pad_id=pad_id, pad_token=_PAD_SYMBOL)
+        self._tokenizer = tokenizer
+        self._session = ort.InferenceSession(
+            str(model_dir / MODEL_FILE),
+            sess_options=_session_options(),
+            providers=["CPUExecutionProvider"],
         )
 
-    def embed_passages(self, texts: Sequence[str]) -> list[list[float]]:
-        prefixed = [PASSAGE_PREFIX + text for text in texts]
+    def _embed_batch(self, texts: Sequence[str]) -> np.ndarray:
+        encodings = self._tokenizer.encode_batch(list(texts))
+        input_ids = np.array([encoding.ids for encoding in encodings], dtype=np.int64)
+        attention_mask = np.array(
+            [encoding.attention_mask for encoding in encodings], dtype=np.int64
+        )
+        token_type_ids = np.zeros_like(input_ids)
+        hidden: np.ndarray = self._session.run(
+            ["last_hidden_state"],
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "token_type_ids": token_type_ids,
+            },
+        )[0]
+        mask = attention_mask[:, :, np.newaxis].astype(np.float32)
+        pooled = (hidden * mask).sum(axis=1) / np.clip(mask.sum(axis=1), 1e-9, None)
+        norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+        normalised: np.ndarray = (pooled / norms).astype(np.float32)
+        return normalised
+
+    def _embed(self, texts: Sequence[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
-        for start in range(0, len(prefixed), BATCH_SIZE):
-            batch = prefixed[start : start + BATCH_SIZE]
-            vectors.extend(
-                vector.tolist() for vector in self._model.embed(batch, batch_size=BATCH_SIZE)
-            )
+        for start in range(0, len(texts), BATCH_SIZE):
+            vectors.extend(self._embed_batch(texts[start : start + BATCH_SIZE]).tolist())
         return vectors
+
+    def embed_passages(self, texts: Sequence[str]) -> list[list[float]]:
+        return self._embed([PASSAGE_PREFIX + text for text in texts])
 
     def query_embedding(self, text: str) -> list[float]:
         """Used by Session 5's query path. Same model, the query prefix."""
-        vector = next(iter(self._model.embed([QUERY_PREFIX + text], batch_size=1)))
-        values: list[float] = vector.tolist()
-        return values
+        return self._embed([QUERY_PREFIX + text])[0]

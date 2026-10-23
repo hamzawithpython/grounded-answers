@@ -86,3 +86,32 @@ Roman Urdu: "dair se aane par kya hota hai?" (late arrival, 4.4) is not in the t
 ## Reproduce
 
 Scratch scripts: extraction (`extract_all.py`), chunking (`chunks.py`), embedding (`embed_model.py`, one model per process), scoring (`evaluate.py`), and the Urdu mini-test (`urdu_test.py`). Model downloads and total memory are listed above. Run one model at a time.
+
+## Runtime change: onnxruntime and tokenizers instead of fastembed (2026-10-23)
+
+fastembed 0.9.0 caps pillow below 13.0, and pillow 12.3.0 carries 35 advisories that 13.0.0 fixes (ADR 0021, amendment). The embedder now runs the same model through onnxruntime 1.31.0 and tokenizers 0.23.3, with the same prefixes, truncation, mean pooling and normalisation.
+
+**Equivalence against fastembed** (same texts, reference vectors from fastembed 0.9.0, 40 questions and 829 chunks):
+
+| Check | Result |
+|---|---|
+| Cosine similarity, queries (minimum / mean) | 1.0 / 1.0 |
+| Cosine similarity, chunks S1 (190, minimum / mean) | 0.99999988 / 1.0 |
+| Cosine similarity, chunks S2 (384) | 0.99999988 / 1.0 |
+| Cosine similarity, chunks S3 (255) | 0.99999988 / 1.0 |
+| Retrieval S1: recall@5 / MRR | 0.778 / 0.633 (same as fastembed) |
+| Retrieval S2: recall@5 / MRR | 0.778 / 0.605 (same as fastembed) |
+| Retrieval S3: recall@5 / MRR | 0.756 / 0.587 (same as fastembed) |
+
+**Session settings.** Four configurations, each in its own process, embedding the 190 S1 chunks:
+
+| Intra-op threads | Memory arena | Time (s) | Peak working set (MiB) |
+|---|---|---|---|
+| 1 | off | 89.8 | 1,122.8 |
+| **2** | **off** | **69.9** | 1,123.4 |
+| 4 | off | 78.8 | 1,123.7 |
+| 2 | on | 126.0 | 1,123.3 |
+
+The chosen setting is 2 threads, arena off. The peak figures in this table include the corpus loaded earlier in the same process, so compare them only with each other. Against fastembed, in the separate measurement above: loading and embedding peaked at about 972 MiB for the new loader, against 923 MiB after load and 1,048 MiB at peak for fastembed.
+
+**Query time** with the new loader: 23.4 ms mean per question (fastembed: 25.8 ms, same machine).
