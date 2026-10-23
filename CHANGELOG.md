@@ -6,6 +6,7 @@ Dependency and tooling changes are listed here too.
 ## [Unreleased]
 
 ### Documentation
+- Step 7 decisions, ADRs 0023 to 0029: the stalled-version retry, replacement and the ordered swap, delete, the per-role transition guard, the purge job, queue cleanup and the document list. ARCHITECTURE §5 and SECURITY (definer-function rules, threats T45 and T46, R20) are updated to match. Nothing is built yet.
 - ADR 0021: embedding model (multilingual-e5-small, MIT, 384 dimensions, with `passage:` / `query:` prefixes) and
   chunking (section-aware, about 1,200 characters, tables whole). Records the hosting requirement (about 1.1 GB RAM per
   process), the pinned offline model, the English-config keyword limitation for Roman Urdu, and pgvector enablement.

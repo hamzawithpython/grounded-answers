@@ -118,6 +118,8 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 | T42 | A tampered or corrupted embedding model changes the vectors without anyone noticing | Every model file is pinned by SHA-256 and size; the fetch step hashes each download before keeping it and never replaces a cached file; the worker refuses to start on a mismatch; CI checks the restored cache (ADR 0022, D7) | Built + tested | `tests/test_ingest_units.py` (verification and fetch refusal tests); `tests/db/test_embedding_model.py` |
 | T43 | Two workers write the same document version, or a slow worker overwrites a newer result | Lease with a fencing token: the final write needs the token its attempt claimed; a worker that lost its lease writes nothing and rolls back (ADR 0022, D1) | Built + tested | `tests/db/test_ingestion.py` (`test_an_older_worker_that_lost_its_lease_writes_nothing`, `test_a_lost_lease_cannot_mark_the_version_failed`) |
 | T44 | Model or parser error text carries document text into the database or the logs | Only the generic reason is stored; the model's exception class name is logged, never its message (ADR 0020, ADR 0022, D4) | Built + tested | `tests/db/test_ingestion.py` (`test_an_embedding_failure_is_recorded_as_embedding_without_its_message`, `test_no_document_text_reaches_the_logs_on_success`) |
+| T45 | `app_user` (an app bug) moves a version to `ready`, or points a document at another version | Per-role transition guard, and app_user loses UPDATE on `documents.current_version_id` (ADR 0026) | Planned, PR 2 | Transition matrix test, catalog test |
+| T46 | A definer function used to change another tenant's data, or a role's own rights are widened | Definer rules in "Definer functions" above; the owner is listed in the guard with only its transitions (ADR 0023, 0024, 0026) | Planned, PRs 2, 3, 6 | Catalog test; cross-tenant tests per function |
 | T45 | A worker, or a bug in it, moves a version to a status the lifecycle does not allow (for example queued straight to ready, which skips the claim and the lease) | A BEFORE UPDATE trigger allows only the worker's steps (queued to processing, processing to ready or failed, retired to purging); any other change by `worker_user` is refused. Extended per role in Step 7 (ADR 0022, D8) | Built + tested | `tests/db/test_ingestion.py` (`test_the_worker_transition_guard_refuses_every_step_but_its_own`) |
 
 ---
@@ -130,6 +132,23 @@ Four layers. A bug in one must not be enough to leak data.
 2. **Policies (RLS):** every table has `ENABLE` and `FORCE ROW LEVEL SECURITY`. `USING` and `WITH CHECK` compare each row with the session tenant. No tenant set means no rows (fail closed).
 3. **Grants:** `app_user` and `worker_user` have column-level grants. Nothing grants access to the password hash or the token tables.
 4. **Tests:** the catalog test fails when a policy, grant, role attribute or function changes without a reviewed change to the expected lists.
+
+### Definer functions: the RLS exceptions (Step 7)
+
+A `SECURITY DEFINER` function runs as its owner, and so it can bypass the tenant check that RLS applies to the caller. Each one is an exception to layer 2 above, so each is listed here, with the rules it must follow:
+
+- pinned `search_path`, and every name schema-qualified;
+- no EXECUTE for PUBLIC;
+- a `NOLOGIN` owner role, which no one can log in as;
+- validated arguments, raising on a bad value;
+- a test in `test_catalog` and a test of its own behaviour, including the cross-tenant refusal;
+- its owner listed in the transition guard with only the transitions it needs (ADR 0026).
+
+| Function | Owner | Returns or changes | Status | ADR |
+|---|---|---|---|---|
+| `retention_due_tenant_ids()` | `retention_definer` | Returns tenant ids only, for due purges | Built (0003) | 0007 |
+| `stalled_version_ids(lease_seconds)` | `retry_definer` | Returns tenant and version ids of expired leases, nothing else | Planned, PR 3 | 0023 |
+| `swap_current_version(version_id)` | `swap_definer` | Moves the current pointer, retires the old version, in the session tenant only | Planned, PR 6 | 0024 |
 
 ---
 
@@ -199,7 +218,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R17 | Cross-tenant job rows. The queue has no RLS (ADR 0015). `worker_user` reads every job row. `app_user` reads every job id across tenants (the enqueue grant, ADR 0016). The ids reveal overall job volume, not content. | ADR 0015, ADR 0016 | Queue in its own schema (`queue`); grants are the reviewed list in `expected_queue_grants.json`; PUBLIC has none; `app_user` cannot read `args` (test). Argument format is checked by a test in Step 1b. | **Accepted by the owner (ADR 0016).** Argument-format test (Step 1b). |
 | R18 | Queue load on the database. Polling and job writes share the database with tenant traffic. | ADR 0015 | None yet | Measure in Session 4; move the queue to its own database if needed (new ADR) |
 | R19 | On Windows (development only) the extraction child has a timeout but no memory limit: the stdlib has no per-process memory limit there, and a Job Object is not added as a dependency. | ADR 0020 | Timeout and output cap on Windows; memory limit on Linux (production and CI) | Accepted for development. Production runs on Linux, where the 1 GiB limit applies and is tested in CI. |
-| R20 | A worker killed hard leaves a version in `processing` with no job to retry it, until its lease expires and a new job is enqueued. The periodic stalled-job retry is not built yet. | ADR 0022, D5 | The lease expires, so the version is never locked for good; a manual re-enqueue recovers it | Open. The periodic retry is the first item of Step 7 (`docs/PROGRESS.md`). It needs a security-definer function for the cross-tenant scan. |
+| R20 | A worker killed hard leaves a version in `processing` with no job to retry it, until its lease expires and a new job is enqueued. The periodic stalled-job retry is not built yet. | ADR 0022, D5 | The lease expires, so the version is never locked for good; a manual re-enqueue recovers it | Open. Planned: ADR 0023, PR 3. The sweep needs the security-definer function `stalled_version_ids`, under the rules in "Definer functions" above. |
 
 ---
 
