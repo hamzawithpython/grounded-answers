@@ -44,6 +44,10 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 **Known open issue (not Session 4):** `tests/db/test_rate_limit.py::test_hard_lock_after_fifty_failures_and_operator_release`
 failed once in three full DB runs. Being fixed in a separate PR before Step 1b (see "Next").
 
+**Worker startup login check (branch `feat/worker-login-check`, change 1):** the worker checks the `worker_user` login once at startup, after the model loads, with a 10 s timeout. A wrong password stops it with `worker not started: database login failed for worker_user` and exit code 1. A database that is unreachable also stops it (`database check failed`). The check is startup-only.
+
+**Change 2, deferred to the deployment session: bounded reconnect, then exit.** When the database drops while the worker runs, retry the connection a bounded number of times, then exit non-zero. Do not build it alone: without a supervisor, a brief database restart would stop the dev worker for good. It must ship with a restart policy (for example a Docker `restart: unless-stopped` or a systemd unit) and a test with a real database restart.
+
 **Other 1a facts:** `EXPECTED_SCHEMA_HEAD` moved to `0005_procrastinate_schema`. The bootstrap (`scripts/bootstrap_database.sql`) creates schema `queue` and sets `search_path = grounded, queue` for `app_user` and `worker_user`. Existing dev databases must re-run the bootstrap (RUNBOOK) before `alembic upgrade head`.
 
 ## Session 4 plan (original, as written in Session 3)
