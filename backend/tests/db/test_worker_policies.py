@@ -124,13 +124,15 @@ def test_worker_moves_retired_to_purging(
 def test_worker_cannot_move_retired_to_ready(
     grounded_db: DbHandle, seeded: Seeded, worker: psycopg.Connection
 ) -> None:
-    """WITH CHECK: the new status must be purging. Any other value is refused with an error."""
+    """The transition guard (ADR 0022): a retired version may only become purging. Any other value is refused."""
     with _admin(grounded_db) as admin:
         doc = _document(admin, seeded.a.tenant, deleted=False)
         ver = _version(admin, seeded.a.tenant, doc, seeded.a.admin, status="retired")
         admin.commit()
     _set_tenant(worker, seeded.a.tenant)
-    with pytest.raises(errors.InsufficientPrivilege, match="row-level security"):
+    with pytest.raises(
+        errors.InsufficientPrivilege, match="may not move a version from retired to ready"
+    ):
         worker.execute(
             "UPDATE grounded.document_versions SET status = 'ready' WHERE id = %s", (ver,)
         )
@@ -219,17 +221,16 @@ def test_worker_deletes_a_deleted_document_with_no_versions(
 def test_worker_clears_current_version_only_on_deleted_documents(
     grounded_db: DbHandle, seeded: Seeded, worker: psycopg.Connection
 ) -> None:
-    """Step 2 of the purge: current_version_id may be set to NULL, and only on a deleted document."""
+    """Step 2 of the purge clears current_version_id only on a deleted document. On a live document the
+    worker's set-current policy (ADR 0022) admits only a ready version, so clearing it is refused by RLS."""
     with _admin(grounded_db) as admin:
         live = _document(admin, seeded.a.tenant, deleted=False)
         admin.commit()
     _set_tenant(worker, seeded.a.tenant)
-    assert (
+    with pytest.raises(errors.InsufficientPrivilege, match="row-level security"):
         worker.execute(
             "UPDATE grounded.documents SET current_version_id = NULL WHERE id = %s", (live,)
-        ).rowcount
-        == 0
-    )
+        )
 
 
 # ---- cross-tenant: none of the above reaches another tenant ----

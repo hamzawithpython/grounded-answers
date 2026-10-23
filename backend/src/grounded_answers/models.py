@@ -222,6 +222,11 @@ class DocumentVersion(Base):
     storage_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The worker's lease on a processing version (ADR 0022). Null in every other status.
+    processing_started_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    processing_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     retired_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -278,6 +283,24 @@ class PgVector(UserDefinedType[list[float]]):
 
     def get_col_spec(self, **kw: Any) -> str:
         return f"{EXTENSIONS_SCHEMA}.vector({self.dimensions})"
+
+    def bind_processor(self, dialect: Any) -> Any:
+        """A Python list becomes pgvector's text form, '[x,y,...]', which the column casts on insert."""
+
+        def process(value: Any) -> str | None:
+            if value is None:
+                return None
+            return "[" + ",".join(repr(float(x)) for x in value) + "]"
+
+        return process
+
+    def result_processor(self, dialect: Any, coltype: Any) -> Any:
+        def process(value: Any) -> list[float] | None:
+            if value is None:
+                return None
+            return [float(x) for x in str(value).strip("[]").split(",")]
+
+        return process
 
 
 class Chunk(Base):

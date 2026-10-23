@@ -6,13 +6,20 @@ Its URL is therefore read from the environment of the worker process, never from
 the web app's Settings never declare it. env_file=None means no .env file is read at all.
 """
 
-from pydantic import PostgresDsn
+from pathlib import Path
+
+from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class WorkerSettings(BaseSettings):
-    """The worker's database login. Set WORKER_DATABASE_URL in the shell, not in a file."""
+    """The worker's settings, all from the shell environment (ADR 0017, ADR 0022)."""
 
     worker_database_url: PostgresDsn
+    # The pinned model directory, from `python -m grounded_answers.embedding.fetch` (ADR 0022, D6). Optional here
+    # so the settings can be read without it. The worker refuses to start without it (jobs/worker.py).
+    worker_embedding_model_dir: Path | None = None
+    # How long an attempt holds a version before another attempt may take it over (ADR 0022, D1).
+    worker_processing_lease_seconds: int = Field(default=1200, ge=120, le=7200)
 
     model_config = SettingsConfigDict(env_file=None, extra="forbid")

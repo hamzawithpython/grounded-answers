@@ -66,6 +66,11 @@
   },
   {
     "table": "document_versions",
+    "name": "document_versions_processing_lease_check",
+    "definition": "CHECK (((status <> 'processing'::text) OR ((processing_started_at IS NOT NULL) AND (processing_token IS NOT NULL))))"
+  },
+  {
+    "table": "document_versions",
     "name": "document_versions_retired_purge_chk",
     "definition": "CHECK (((retired_at IS NULL) = (purge_after IS NULL)))"
   },

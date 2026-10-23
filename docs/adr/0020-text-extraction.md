@@ -126,6 +126,10 @@ Heading level comes from the format: heading styles for DOCX, the heading tokens
 - **pypdf refuses the real bomb itself** (`LimitReachedError` after about 111 MB). The Linux memory limit is proven with a stdlib-only decompression bomb under a 256 MiB limit, because it is the limit that has to stop the bomb in that test.
 - **Lint suppressions for the sandbox's subprocess calls** (ruff rule S603): two call sites carry `noqa` with a stated reason, because the arguments are fixed and the file is never on the command line. Approval is requested in the review; see the PR description.
 
+## Amendment (ADR 0022, 2026-10-23): a fifth reason
+
+The ingestion worker adds two reasons (ADR 0022). `embedding`: the embedding model failed on the document's text. `retries_exhausted`: every attempt hit a transient error. The reason list is now `timeout`, `memory`, `unreadable`, `no_text`, `embedding` and `retries_exhausted`. The last two are not extraction reasons, but they are generic, so an admin can tell a bad document from an outage. The stderr rule is unchanged. The model's error message is never stored or logged, only its exception class name.
+
 ## Related decisions
 
 - ADR 0015 (Procrastinate, worker boundary, outbox)

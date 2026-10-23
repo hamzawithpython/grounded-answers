@@ -72,6 +72,17 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked --group operator
+      # The pinned embedding model (ADR 0021, ADR 0022 decision D7). The cache is keyed by the pinned revision.
+      # The fetch step checks every file's SHA-256 and size, so a corrupted or tampered cache fails loudly here.
+      - name: Restore the pinned embedding model cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/grounded-answers-models
+          key: embedding-model-614241f622f53c4eeff9890bdc4f31cfecc418b3
+      - name: Fetch and verify the pinned embedding model
+        run: |
+          uv run python -m grounded_answers.embedding.fetch "$HOME/grounded-answers-models"
+          echo "TEST_EMBEDDING_MODEL_DIR=$HOME/grounded-answers-models/614241f622f53c4eeff9890bdc4f31cfecc418b3" >> "$GITHUB_ENV"
       # psql comes from the pinned server image, so its version matches the server.
       # The fixture pipes the same .sql files the operator runs (ADR 0006 amendment).
       - name: Point the fixture at psql in the PostgreSQL container
