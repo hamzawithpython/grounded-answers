@@ -657,3 +657,11 @@ Document bytes are stored in the database (`document_blobs`), so the host must b
 2. **Backup size and window.** Find how long the host keeps backups and how big they get. A backup holds the bytes of deleted documents until it expires (ADR 0007, SECURITY R3).
 3. **Encryption at rest.** Confirm the host encrypts the database disks. The application does not encrypt the bytes.
 4. **Scale-up trigger.** When the database storage or backup size approaches the limit, the recorded next step is a move to object storage (Backblaze B2 is the first candidate, ADR 0018). That is a new ADR.
+
+### Hosting checklist for vector search (ADR 0021)
+
+The chunks table needs the pgvector extension, and the embedding model runs inside the web app and the worker. Check these before go-live and record each result in SECURITY.md.
+
+1. **Enable pgvector.** The bootstrap SQL runs `CREATE EXTENSION IF NOT EXISTS vector` in each database. Confirm the host offers pgvector and that the extension is created, then confirm the version: `SELECT extversion FROM pg_extension WHERE extname = 'vector';`.
+2. **Memory per process.** The web app and the worker each load the embedding model, about 1 GB of RAM per process (measured: 923 MiB to embed a question, about 1,050 MiB peak to embed chunks). A host with 512 MB of RAM cannot run either process.
+3. **Model files present at build time.** The pinned model is fetched once at build or deploy into the fixed cache directory. Production never downloads at startup. Confirm the image contains the files before the first start.
