@@ -90,7 +90,7 @@ def redacted_stream_handler(stream: Any = None) -> logging.Handler:
 # The loggers that carry job records: Procrastinate's own, and ours in the jobs package. Both the
 # worker and the web app (which enqueues) install the filter here, and nowhere else, so the
 # logging of the rest of the application is unchanged.
-JOB_LOGGERS = ("procrastinate", "grounded_answers.jobs")
+JOB_LOGGERS = ("procrastinate", "grounded_answers.jobs", "grounded_answers.embedding")
 
 
 def install_job_log_redaction(stream: Any = None) -> logging.Handler:

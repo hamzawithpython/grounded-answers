@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from grounded_answers.database import create_database_engine, create_session_factory
-from grounded_answers.embedding.model import ModelIntegrityError, PinnedEmbedder
+from grounded_answers.embedding.model import ModelIntegrityError, load_embedder
 from grounded_answers.jobs.app import build_app
 from grounded_answers.jobs.ingest_task import register_ingest_task
 from grounded_answers.jobs.logging_filter import install_job_log_redaction
@@ -28,7 +28,7 @@ from grounded_answers.worker_config import WorkerSettings
 
 
 async def serve(*, conninfo: str, database_url: str, model_dir: Path, lease_seconds: int) -> None:
-    embedder = PinnedEmbedder(model_dir)
+    embedder = load_embedder(model_dir)
     engine = create_database_engine(database_url)
     session_factory = create_session_factory(engine)
     app = build_app(conninfo)
