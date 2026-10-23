@@ -20,6 +20,10 @@ SCRATCH_DB_NAMES = frozenset({TEST_DB_NAME, ROUNDTRIP_DB_NAME})
 # The admin URL must connect to the maintenance database, never to a database we keep.
 MAINTENANCE_DB_NAME = "postgres"
 
+# The dev cluster listens on this port (docker-compose.yml, service postgres). A test run must never reach it, even
+# when no dev URL is configured to compare against (the failure that reset dev role passwords, 2026-10-23).
+DEV_CLUSTER_PORT = 5432
+
 
 class GuardError(RuntimeError):
     """Raised before anything is connected to or dropped. The message names the failed check."""
@@ -75,6 +79,13 @@ def check_targets(admin_url: str, dev_urls: Iterable[str] = ()) -> None:
         if database_name(dev_url) == TEST_DB_NAME:
             raise GuardError(f"guard: a dev URL names the test database '{TEST_DB_NAME}'")
 
+    # Unconditional: the dev port is refused even when no dev URL is configured to compare against.
+    if endpoint(admin_url)[1] == DEV_CLUSTER_PORT:
+        raise GuardError(
+            f"guard: TEST_ADMIN_DATABASE_URL uses port {DEV_CLUSTER_PORT}, the dev cluster. "
+            "The test cluster is on port 5433 (docs/RUNBOOK.md)"
+        )
+
 
 def check_scratch_database(name: str) -> None:
     """Refuse to drop or create any database name that is not one of the scratch names."""
@@ -82,4 +93,22 @@ def check_scratch_database(name: str) -> None:
         raise GuardError(
             f"guard: '{name}' is not a scratch test database; tests may only use "
             f"{sorted(SCRATCH_DB_NAMES)}"
+        )
+
+
+def check_same_cluster(admin_system_id: str, psql_system_id: str) -> None:
+    """
+    The admin connection and the psql command must reach the same PostgreSQL cluster (ADR 0006).
+
+    The bootstrap runs through psql and sets the login roles' passwords. A PSQL_COMMAND that names another container
+    would set them on that cluster. Both identifiers come from pg_control_system(). Empty means unknown, so refuse.
+    """
+    if not admin_system_id or not psql_system_id:
+        raise GuardError(
+            "guard: could not read the cluster identity from the admin URL or PSQL_COMMAND"
+        )
+    if admin_system_id != psql_system_id:
+        raise GuardError(
+            "guard: PSQL_COMMAND reaches a different PostgreSQL cluster than TEST_ADMIN_DATABASE_URL. "
+            "Nothing was changed."
         )

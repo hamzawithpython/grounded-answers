@@ -46,7 +46,7 @@ jobs:
           # Obviously fake, test-only (ADR 0006). Never used by the app.
           POSTGRES_PASSWORD: ci-test-only-not-a-secret
         ports:
-          - 5432:5432
+          - 5433:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
@@ -65,7 +65,7 @@ jobs:
           --health-retries 10
     env:
       # Admin URL for the test fixture only: drop, create, bootstrap (ADR 0006).
-      TEST_ADMIN_DATABASE_URL: postgresql://postgres:ci-test-only-not-a-secret@127.0.0.1:5432/postgres
+      TEST_ADMIN_DATABASE_URL: postgresql://postgres:ci-test-only-not-a-secret@127.0.0.1:5433/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0

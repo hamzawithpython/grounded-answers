@@ -40,3 +40,30 @@ def run_sql_file(
             f"{sql_file.name} failed in {dbname!r} (psql exit {result.returncode}):\n"
             f"{stderr[-2000:]}"
         )
+
+
+def run_sql_query(psql: list[str], env: Mapping[str, str], sql: str) -> str:
+    """Run one query through psql (against its maintenance database) and return its single value, unquoted."""
+    result = subprocess.run(  # noqa: S603 - PSQL_COMMAND is operator config from the env, not input (ADR 0006)
+        [
+            *psql,
+            "-X",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-At",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-c",
+            sql,
+        ],
+        env=dict(env),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"psql query failed (exit {result.returncode})")
+    return result.stdout.decode("utf-8", "replace").strip()

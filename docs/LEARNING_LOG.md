@@ -660,3 +660,19 @@ A: Assert the row count, not just the absence of an error, and assert that the d
 
 **Q: Why keep `ready` bytes unreadable to the worker?**
 A: Least privilege. The worker needs the bytes only while extracting text (`queued`, `processing`) and while purging (`purging`). Widening the read to `ready` would give a compromised worker every live file, so any such change must be a new migration with a reason.
+
+## Session 4 (guard incident and ops): plain words
+
+### A safety check that compares against an optional setting passes silently when the setting is missing
+Our test guard refused a test run from touching the dev database only if it could compare the admin URL with a dev URL from the environment. Our `.env` had no dev URL, so the comparison had nothing to compare against, and every check passed. A test run then reached the dev cluster and reset the dev login roles' passwords. The dev database holds the same kind of seed data as the tests, so we saw the test tenants there (`Acme`, `Globex`).
+
+The fix has two rules. First, refuse the dangerous case unconditionally: the dev port is refused on its own, whatever is configured. Second, check every path that reaches a server, not only the one we look at. The admin connection and the psql command must reach the same cluster, and we compare their `system_identifier` from `pg_control_system()` before anything is changed.
+
+**Q: Why not compare with the dev URLs, and refuse only when they match?**
+A: A check that depends on an optional setting is only as strong as that setting. When the setting is missing, the check says "nothing to compare, so pass". Refuse the dangerous case directly, and keep the comparison as a second check.
+
+**Q: What does "verify every path reaches the same server" mean here?**
+A: The test fixture reaches the database in two ways: a connection through the admin URL, and the psql command, which runs in a container. If the two reach different clusters, a bootstrap that sets passwords can change the wrong server. Compare an identity that each path reports, here the cluster's system identifier, and refuse on a mismatch.
+
+**Q: How did you know the fix works?**
+A: With the admin URL on the dev port, the guard refused before any change, and the dev data was the same afterwards. With the test cluster as the admin URL and the psql command pointed at the dev container, it refused with a message that names the mismatch, again before any change. Each refusal has a unit test as well.
