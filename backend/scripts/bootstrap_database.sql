@@ -42,17 +42,27 @@ BEGIN
 END
 $$;
 
+-- 3c. The pgvector extension (ADR 0021), in its own schema. Not public: PUBLIC is revoked above and
+--     the login roles have no privilege there. Not grounded: pgvector's functions and operators
+--     would clutter the schema the catalog guard inspects. Owned by the admin who runs this file.
+--     Only the three login roles get USAGE. Nobody gets CREATE. Every statement is idempotent.
+CREATE SCHEMA IF NOT EXISTS extensions;
+REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
+GRANT USAGE ON SCHEMA extensions TO migration_role, app_user, worker_user;
+CREATE EXTENSION IF NOT EXISTS vector SCHEMA extensions;
+
 -- 4. Per-database search_path. IN DATABASE keeps the setting scoped to this database,
 --    because the grounded schema only exists in this one. app_user and worker_user also
---    get queue, because Procrastinate's SQL uses unqualified names (ADR 0016). grounded
---    stays first, so tenant tables resolve exactly as before.
+--    get queue, because Procrastinate's SQL uses unqualified names (ADR 0016). Every role
+--    gets extensions, so the vector type and its operators resolve. grounded stays first,
+--    so tenant tables resolve exactly as before.
 DO $$
 BEGIN
-  EXECUTE format('ALTER ROLE migration_role IN DATABASE %I SET search_path = grounded',
+  EXECUTE format('ALTER ROLE migration_role IN DATABASE %I SET search_path = grounded, extensions',
                  current_database());
-  EXECUTE format('ALTER ROLE app_user IN DATABASE %I SET search_path = grounded, queue',
+  EXECUTE format('ALTER ROLE app_user IN DATABASE %I SET search_path = grounded, queue, extensions',
                  current_database());
-  EXECUTE format('ALTER ROLE worker_user IN DATABASE %I SET search_path = grounded, queue',
+  EXECUTE format('ALTER ROLE worker_user IN DATABASE %I SET search_path = grounded, queue, extensions',
                  current_database());
 END
 $$;

@@ -5,6 +5,26 @@
     "definition": "CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)))"
   },
   {
+    "table": "chunks",
+    "name": "chunks_body_check",
+    "definition": "CHECK (((char_length(body) >= 1) AND (char_length(body) <= 20000)))"
+  },
+  {
+    "table": "chunks",
+    "name": "chunks_dims_check",
+    "definition": "CHECK ((extensions.vector_dims(embedding) = 384))"
+  },
+  {
+    "table": "chunks",
+    "name": "chunks_model_check",
+    "definition": "CHECK ((((char_length(embedding_model) >= 1) AND (char_length(embedding_model) <= 200)) AND ((char_length(embedding_model_version) >= 1) AND (char_length(embedding_model_version) <= 200))))"
+  },
+  {
+    "table": "chunks",
+    "name": "chunks_position_check",
+    "definition": "CHECK ((\"position\" >= 0))"
+  },
+  {
     "table": "document_blobs",
     "name": "document_blobs_length_check",
     "definition": "CHECK ((octet_length(content) = byte_size))"

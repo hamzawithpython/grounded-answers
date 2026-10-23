@@ -25,6 +25,7 @@ APP_INSERT_POLICIES = frozenset(
         ("app_user_refresh_tokens_insert", "refresh_tokens"),
         ("app_user_password_reset_tokens_insert", "password_reset_tokens"),
         ("worker_audit_insert", "audit_log"),
+        ("worker_chunks_insert", "chunks"),
     }
 )
 
