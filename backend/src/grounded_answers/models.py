@@ -41,6 +41,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql.base import ischema_names
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import UserDefinedType
 
@@ -301,6 +302,12 @@ class PgVector(UserDefinedType[list[float]]):
             return [float(x) for x in str(value).strip("[]").split(",")]
 
         return process
+
+
+# Reflection (the drift test in tests/db/test_orm_metadata.py) reads the column type by its schema-qualified
+# name and passes its dimension to the class. Without this entry SQLAlchemy skips the column's type, so the
+# drift check would not compare the embedding dimension at all.
+ischema_names["extensions.vector"] = PgVector
 
 
 class Chunk(Base):
