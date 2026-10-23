@@ -317,6 +317,14 @@ if ($LASTEXITCODE -ne 0) { throw "database bootstrap failed" }
 
 **Session 4, Step 1a (ADR 0016):** this bootstrap also creates the `queue` schema and gives `app_user` and `worker_user` the search path `grounded, queue`. On a database that was bootstrapped before this step, run step 5 again **before** `alembic upgrade head` (migration `0005`). Migration `0005` fails with "schema queue is missing" otherwise. The bootstrap is idempotent.
 
+**Session 5, Step 5a (ADR 0021): pgvector.** On a dev database bootstrapped before this step, run step 5 again **before** `alembic upgrade head`. It creates the `extensions` schema, grants `USAGE` on it to the three login roles only, installs the `vector` extension there, and adds `extensions` to each role's search path. Migration `0008_chunks` needs the extension and fails without it. The role search path applies to **new** connections, so restart the web app and the worker after this step. The bootstrap is idempotent.
+
+Check the extension (expect one row, schema `extensions`):
+
+```powershell
+docker compose exec -T postgres psql -U postgres -d grounded_answers -c "SELECT e.extname, n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'vector';"
+```
+
 **6. Verify the three logins** (see "Verify login" below). Expect three `LOGIN OK` lines.
 
 ```powershell

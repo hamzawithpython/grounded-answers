@@ -24,8 +24,10 @@ from types import MappingProxyType
 from typing import Any
 
 from sqlalchemy import (
+    ARRAY,
     BigInteger,
     Boolean,
+    Computed,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -38,10 +40,15 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.types import UserDefinedType
 
 SCHEMA = "grounded"
+# pgvector is installed here by bootstrap_database.sql (ADR 0021).
+EXTENSIONS_SCHEMA = "extensions"
+# multilingual-e5-small (ADR 0021). Migration 0008 and the vector type use the same number.
+EMBEDDING_DIMENSIONS = 384
 
 # Shorthand for the ON DELETE / ON UPDATE clause every foreign key in the migrations uses.
 _RESTRICT: dict[str, Any] = {"ondelete": "RESTRICT", "onupdate": "RESTRICT"}
@@ -255,6 +262,72 @@ class DocumentBlob(Base):
     )
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_now()
+    )
+
+
+class PgVector(UserDefinedType[list[float]]):
+    """pgvector's `vector` type with a fixed dimension (ADR 0021). The extension lives in the `extensions`
+    schema, so the type is written with that schema name."""
+
+    cache_ok = True
+
+    def __init__(self, dimensions: int) -> None:
+        self.dimensions = dimensions
+
+    def get_col_spec(self, **kw: Any) -> str:
+        return f"{EXTENSIONS_SCHEMA}.vector({self.dimensions})"
+
+
+class Chunk(Base):
+    """
+    One chunk of a document version (ADR 0021): its text, the clause labels it contains (for citations),
+    its embedding and the model that made it. `tsv` is generated from `body` with the English config.
+    The worker writes chunks during ingestion. The app reads only ready, current, undeleted versions (RLS).
+    """
+
+    __tablename__ = "chunks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "version_id"],
+            [f"{SCHEMA}.document_versions.tenant_id", f"{SCHEMA}.document_versions.id"],
+            name="chunks_version_fk",
+            **_RESTRICT,
+        ),
+        Index(
+            "chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index("chunks_tsv_gin", "tsv", postgresql_using="gin"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(f"{SCHEMA}.tenants.id", **_RESTRICT),
+        primary_key=True,
+        nullable=False,
+    )
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
+    section_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    heading: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    clause_labels: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(PgVector(EMBEDDING_DIMENSIONS), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_model_version: Mapped[str] = mapped_column(Text, nullable=False)
+    tsv: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english'::regconfig, body)", persisted=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=_now()
     )

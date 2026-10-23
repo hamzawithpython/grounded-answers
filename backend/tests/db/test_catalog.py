@@ -256,3 +256,40 @@ def test_grants_on_queue_match_expected_list(catalog: psycopg.Connection) -> Non
         f"unexpected queue grants:\n  extra: {set(actual) - set(expected)}\n"
         f"  missing: {set(expected) - set(actual)}"
     )
+
+
+def test_extensions_schema_has_no_public_privileges(catalog: psycopg.Connection) -> None:
+    """PUBLIC (grantee oid 0) holds nothing on the extensions schema (ADR 0021, bootstrap step 3c)."""
+    public = catalog.execute(
+        "SELECT a.privilege_type FROM pg_namespace n, aclexplode(n.nspacl) a "
+        "WHERE n.nspname = 'extensions' AND a.grantee = 0"
+    ).fetchall()
+    assert public == [], f"PUBLIC has privileges on schema extensions: {public}"
+
+
+def test_extensions_schema_grants_usage_to_the_login_roles_only(
+    catalog: psycopg.Connection,
+) -> None:
+    """Only the three login roles hold USAGE, and nobody but the owner holds CREATE. The owner, the
+    admin who runs the bootstrap, is excluded."""
+    rows = catalog.execute(
+        "SELECT r.rolname, a.privilege_type FROM pg_namespace n, aclexplode(n.nspacl) a "
+        "JOIN pg_roles r ON r.oid = a.grantee "
+        "WHERE n.nspname = 'extensions' AND a.grantee <> n.nspowner "
+        "ORDER BY r.rolname, a.privilege_type"
+    ).fetchall()
+    assert rows == [
+        ("app_user", "USAGE"),
+        ("migration_role", "USAGE"),
+        ("worker_user", "USAGE"),
+    ], f"unexpected privileges on schema extensions: {rows}"
+
+
+def test_vector_extension_is_installed_in_the_extensions_schema(
+    catalog: psycopg.Connection,
+) -> None:
+    row = catalog.execute(
+        "SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace "
+        "WHERE e.extname = 'vector'"
+    ).fetchone()
+    assert row == ("extensions",), f"pgvector is not in schema extensions: {row}"
