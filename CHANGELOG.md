@@ -21,6 +21,7 @@ Dependency and tooling changes are listed here too.
 - Repository made public. Branch protection on `main` applied and verified through the API (T24).
 
 ### Fixed
+- The test database guard refuses the dev port (5432) unconditionally, even with no dev URL configured, and refuses a psql command that reaches a different cluster than the admin URL (same system identifier check). A test run had reset the dev cluster's login roles (LEARNING_LOG, Session 4).
 - `alembic/env.py` no longer silences existing loggers (`disable_existing_loggers=False`). The default
   disabled every app logger that existed when migrations ran in the same process (Session 3, Step 2).
 - `backend/.env.example` no longer contains `MIGRATION_DATABASE_URL`. The web app loads that file, and

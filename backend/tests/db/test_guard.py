@@ -7,6 +7,7 @@ from .guard import (
     ROUNDTRIP_DB_NAME,
     TEST_DB_NAME,
     GuardError,
+    check_same_cluster,
     check_scratch_database,
     check_targets,
     database_name,
@@ -109,3 +110,28 @@ def test_any_other_name_is_refused(no_connections: None, name: str) -> None:
     """The dev database, the maintenance database and look-alike names are never dropped."""
     with pytest.raises(GuardError, match="not a scratch test database"):
         check_scratch_database(name)
+
+
+def test_the_dev_port_is_refused_even_with_no_dev_url_configured(no_connections: None) -> None:
+    """The bug of 2026-10-23: with no dev URL in the environment, an admin URL on the dev port passed the guard, and the
+    fixture reset the dev cluster's roles. The dev port is refused on its own now."""
+    admin_on_dev_port = "postgresql://postgres:other-secret@127.0.0.1:5432/postgres"
+    with pytest.raises(GuardError, match="uses port 5432, the dev cluster"):
+        check_targets(admin_on_dev_port, [])
+
+
+def test_the_same_cluster_passes(no_connections: None) -> None:
+    check_same_cluster("7699370521932238886", "7699370521932238886")
+
+
+def test_a_psql_command_on_another_cluster_is_refused(no_connections: None) -> None:
+    """PSQL_COMMAND named the dev container while the admin URL named the test cluster: refuse before any change."""
+    with pytest.raises(GuardError, match="different PostgreSQL cluster"):
+        check_same_cluster("7699370521932238886", "7699191651001303078")
+
+
+def test_an_unknown_cluster_identity_is_refused(no_connections: None) -> None:
+    with pytest.raises(GuardError, match="could not read the cluster identity"):
+        check_same_cluster("", "7699370521932238886")
+    with pytest.raises(GuardError, match="could not read the cluster identity"):
+        check_same_cluster("7699370521932238886", "")

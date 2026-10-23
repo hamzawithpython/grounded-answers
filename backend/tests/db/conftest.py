@@ -32,9 +32,9 @@ from grounded_answers.scram import build_verifier
 
 from .auth_support import accounts, client  # noqa: F401 - fixtures for the auth HTTP tests
 from .database import LOGIN_ROLES, DbHandle
-from .guard import TEST_DB_NAME, check_targets
+from .guard import TEST_DB_NAME, check_same_cluster, check_targets
 from .ingest_support import admin, made  # noqa: F401 - fixtures for the ingestion tests
-from .psql import run_sql_file
+from .psql import run_sql_file, run_sql_query
 from .seed import Seeded, seed
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -64,18 +64,16 @@ def _dev_urls() -> list[str]:
     return urls
 
 
+# The cluster identity: the same value through the admin connection and through PSQL_COMMAND (ADR 0006).
+SYSTEM_ID_SQL = "SELECT system_identifier::text FROM pg_control_system()"
+
+
 @pytest.fixture(scope="session")
 def grounded_db() -> Iterator[DbHandle]:
     """Fresh grounded_answers_test with cluster and database bootstrap applied."""
     admin_url = _required_env("TEST_ADMIN_DATABASE_URL")
     psql = shlex.split(_required_env("PSQL_COMMAND"))
     check_targets(admin_url, _dev_urls())
-
-    with psycopg.connect(admin_url, autocommit=True) as bootstrap:
-        bootstrap.execute(
-            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(TEST_DB_NAME))
-        )
-        bootstrap.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(TEST_DB_NAME)))
 
     passwords = {role: secrets.token_urlsafe(24) for role in LOGIN_ROLES}
     with psycopg.connect(admin_url) as bootstrap:
@@ -85,6 +83,20 @@ def grounded_db() -> Iterator[DbHandle]:
     for role, verifier in verifiers.items():
         env[f"{role.upper()}_SCRAM"] = verifier
     redact = list(verifiers.values())
+
+    # Before anything is dropped or changed: PSQL_COMMAND must reach the cluster that the admin URL reaches.
+    with psycopg.connect(admin_url) as identity:
+        admin_system_id = identity.execute(SYSTEM_ID_SQL).fetchone()
+    check_same_cluster(
+        str(admin_system_id[0]) if admin_system_id else "",
+        run_sql_query(psql, env, SYSTEM_ID_SQL),
+    )
+
+    with psycopg.connect(admin_url, autocommit=True) as bootstrap:
+        bootstrap.execute(
+            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(TEST_DB_NAME))
+        )
+        bootstrap.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(TEST_DB_NAME)))
 
     run_sql_file(psql, SCRIPTS_DIR / "bootstrap_cluster.sql", "postgres", env, redact)
     run_sql_file(psql, SCRIPTS_DIR / "bootstrap_database.sql", TEST_DB_NAME, env, redact)
