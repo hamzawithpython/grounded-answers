@@ -336,13 +336,13 @@ Constraints: `UNIQUE (tenant_id, id)`.
 
 1. Upload creates a `document_versions` row with `status = queued`. The bytes are stored under the server-generated `storage_key`.
 2. Ingestion moves the version through `processing` to `ready` (or `failed` with a reason).
-3. **Swap, in one transaction:** the new version becomes `ready` and `documents.current_version_id` points at it. The old current version becomes `retired`, with `retired_at = now()` and `purge_after = now() + DOCUMENT_RETENTION_DAYS`.
+3. **Swap, in one transaction (ADR 0024):** the worker's `ready` write and a call to the definer function `swap_current_version` happen together. A version becomes current only if its `version_no` is higher than the current one's, or the document has no current version. Then the old current version becomes `retired`, with `retired_at = now()` and `purge_after = now() + DOCUMENT_RETENTION_DAYS`. A finished version that is older than the current one is retired at once, as superseded.
 
 Answers cite only the current `ready` version. A `queued` or `processing` version is never cited.
 
 ### 5.3 Delete
 
-One transaction: set `documents.deleted_at = now()` and `purge_after = now() + DOCUMENT_RETENTION_DAYS`. Set every version to `retired` with `retired_at` and `purge_after`. Write audit entry `document.delete` (no title, no filename). After commit, retrieval excludes the document (section 5.6).
+One transaction (ADR 0025): set `documents.deleted_at = now()` and `purge_after = now() + DOCUMENT_RETENTION_DAYS`. Set every version that is not already `retired` or `purging` to `retired` with `retired_at` and `purge_after`. Write audit entry `document.delete` (counts only, no title, no filename). After commit, retrieval excludes the document (section 5.6). A deleted or unknown document returns 404.
 
 **Restore is not supported in v1.**
 
@@ -364,6 +364,8 @@ for tid in retention_due_tenant_ids():
 ```
 
 Each tenant is processed under normal RLS, so the worker can't read or change another tenant's rows, even if the code has a bug.
+
+**Built design (ADR 0027):** the sweep reads the due items for each tenant inside that tenant's transaction, and defers **one job per item** with a queueing lock (`purge:<kind>:<id>`), so repeated sweeps do not pile up jobs. Each job runs the steps below in its own tenant transaction. A crash rolls the item back, and the next sweep defers it again.
 
 For each due item, in this order (children first, because of RESTRICT):
 
@@ -398,7 +400,24 @@ Chunks inherit this rule once they exist (section 6).
 
 ### 5.8 Settings
 
-- `DOCUMENT_RETENTION_DAYS`: integer, default `30`, range `1–365`. Validated in `Settings` at startup. Added to `.env.example` in Session 2, Step 4.
+- `DOCUMENT_RETENTION_DAYS`: integer, default `30`, range `1–365`. Validated in `Settings` at startup. Not in code yet: it is built in Step 7, PR 7 (ADR 0027). This section described it as added in Session 2, Step 4; that was wrong, and the check found no match in `backend/`.
+
+### 5.10 Step 7 jobs and endpoints (ADR 0023 to 0029)
+
+| Item | Kind | Schedule or trigger | Definer function | ADR |
+|---|---|---|---|---|
+| Stalled-version sweep | Periodic job (worker_user) | Every few minutes | `stalled_version_ids` (`retry_definer`) | 0023 |
+| Purge sweep and purge jobs | Periodic job, then one job per item | Every few minutes | none (RLS, inside the tenant) | 0027 |
+| Queue cleanup | Built-in `remove_old_jobs`, daily | Periodic | none | 0028 |
+| `swap_current_version` | Called by the worker in its finish transaction | Each replacement | `swap_definer` | 0024 |
+
+| Endpoint | Role | ADR |
+|---|---|---|
+| `POST /documents/{id}/versions` | tenant_admin | 0024 |
+| `DELETE /documents/{id}` | tenant_admin | 0025 |
+| `GET /documents` (cursor pagination) | tenant_admin | 0029 |
+
+The status transitions that each role may make are in ADR 0026.
 
 ## 5.9 Text extraction (Session 4, Step 4, ADR 0020)
 

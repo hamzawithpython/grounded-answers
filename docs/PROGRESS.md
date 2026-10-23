@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-22 (Session 4, Step 1a built on `feat/job-queue-foundation`, awaiting review)
+**Last updated:** 2026-10-24 (Session 4: PR #38 merged, dev database at migration 0009, Step 7 planning, no code yet)
 
 ## Session 3 complete (2026-10-22)
 
@@ -32,7 +32,7 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 | 4 | Text extraction (ADR 0020): pypdf, python-docx, markdown-it-py in a child process with timeouts and a Linux memory limit; DOCX XXE and billion-laughs tested; no-text PDFs refused (SPEC §6.1 limitation, awaiting approval of the wording) | 🟡 Built on `feat/extraction-4`. Not committed. Linux container run: 45 passed, demo set under 1 GiB. |
 | 5 | Embedding model and chunking (ADR 0021, `docs/EVAL.md`): multilingual-e5-small, S1 chunks. Chunks table: extensions schema and pgvector (bootstrap), migration `0008_chunks` | ✅ Merged (PR #32 docs, PR #33 chunks table). Retrieval strategy is Session 5. |
 | 6 | Ingestion worker (ADR 0022): lease and fencing token, one-transaction write, retries, `embedding` failure reason (amends ADR 0020), pinned model files with hash checks, migration `0009_ingestion_lease`, CI model cache | 🟡 Built on `feat/ingestion-worker`. Gates and CI pending. Upload stays off until Step 8. |
-| 7 | Replace, delete and purge. **First item: the periodic stalled-job retry** (R20, ADR 0022 D5). **Also: extend the transition guard (ADR 0022, D8) to a per-role table, so app_user's replace and delete are guarded**: a worker killed hard leaves a version in `processing`. It needs a security-definer function for the cross-tenant scan. | Not started |
+| 7 | Replace, delete, purge and the retry that closes R20 (ADR 0023 to 0029). Decisions approved 2026-10-24. Build order: PR 1 docs (ADRs, this update); PR 2 per-role transition guard and app_user grant revoke (migration 0010); PR 3 stalled-version retry (migration 0011, definer `stalled_version_ids`); PR 4 delete; PR 5 list; PR 6 replace and swap (definer `swap_current_version`); PR 7 purge and `DOCUMENT_RETENTION_DAYS`; PR 8 queue cleanup. | 🟡 PR 1 in review. Builds start after it merges. |
 | 8 | End-to-end with `demo-data/`, `UPLOAD_ENABLED` on | Not started |
 
 **Known limits to revisit with evidence (ADR 0020):** PDF tables are text in v1 (D-A). If Session 5 PDF table questions fail, pdfplumber is the first candidate. PDF heading levels use font size only for unnumbered headings. Windows development has no memory limit (SECURITY R19).
@@ -44,7 +44,11 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 **Known open issue (not Session 4):** `tests/db/test_rate_limit.py::test_hard_lock_after_fifty_failures_and_operator_release`
 failed once in three full DB runs. Being fixed in a separate PR before Step 1b (see "Next").
 
-**Worker startup login check (branch `feat/worker-login-check`, change 1):** the worker checks the `worker_user` login once at startup, after the model loads, with a 10 s timeout. A wrong password stops it with `worker not started: database login failed for worker_user` and exit code 1. A database that is unreachable also stops it (`database check failed`). The check is startup-only.
+**Step 7 facts verified in PR 1 (Procrastinate 3.10.0, from the installed source):** `get_stalled_jobs` has two modes, by start time and by worker heartbeat; neither reads the version lease, so ADR 0023 uses a state-based sweep. `queueing_lock` raises `AlreadyEnqueued` on a duplicate defer while one is waiting. `remove_old_jobs` is a built-in task (`procrastinate.builtin_tasks`). Procrastinate's web docs differ between the stable and main branches (stable uses heartbeats; main uses a 30-second `doing` rule), so the installed source is the reference. `DOCUMENT_RETENTION_DAYS` is not in code (PR 7). `app_user` already has UPDATE on `documents.current_version_id`, which no app code uses (PR 2 revokes it).
+
+**Done since the last update (2026-10-24):** PR #38 (worker startup login check) is merged as `a25607f`. The dev cleanup is done: the stray test database is dropped, the dev role passwords are reset, and the dev database is at migration `0009`. `/ready` returns 200 and the worker smoke test passed. Step 7 is in planning (no code).
+
+**Worker startup login check (PR #38, merged, change 1):** the worker checks the `worker_user` login once at startup, after the model loads, with a 10 s timeout. A wrong password stops it with `worker not started: database login failed for worker_user` and exit code 1. A database that is unreachable also stops it (`database check failed`). The check is startup-only.
 
 **Change 2, deferred to the deployment session: bounded reconnect, then exit.** When the database drops while the worker runs, retry the connection a bounded number of times, then exit non-zero. Do not build it alone: without a supervisor, a brief database restart would stop the dev worker for good. It must ship with a restart policy (for example a Docker `restart: unless-stopped` or a systemd unit) and a test with a real database restart.
 
