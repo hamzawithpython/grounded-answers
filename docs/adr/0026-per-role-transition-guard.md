@@ -1,6 +1,6 @@
 # ADR 0026: Per-role transition guard, and narrowing app_user's grants
 
-**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 2 (migration `0010`).
+**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 2 (migration `0010`), tested as a full matrix. swap_definer is added with its function in PR 6.
 
 **Date:** 2026-10-24
 

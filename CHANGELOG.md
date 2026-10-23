@@ -6,7 +6,7 @@ Dependency and tooling changes are listed here too.
 ## [Unreleased]
 
 ### Documentation
-- Step 7 decisions, ADRs 0023 to 0029: the stalled-version retry, replacement and the ordered swap, delete, the per-role transition guard, the purge job, queue cleanup and the document list. ARCHITECTURE §5 and SECURITY (definer-function rules, threats T45 and T46, R20) are updated to match. Nothing is built yet.
+- Step 7 decisions, ADRs 0023 to 0029: the stalled-version retry, replacement and the ordered swap, delete, the per-role transition guard, the purge job, queue cleanup and the document list. ARCHITECTURE §5 and SECURITY (definer-function rules, threats T46 and T47, R20) are updated to match. Nothing is built yet.
 - ADR 0021: embedding model (multilingual-e5-small, MIT, 384 dimensions, with `passage:` / `query:` prefixes) and
   chunking (section-aware, about 1,200 characters, tables whole). Records the hosting requirement (about 1.1 GB RAM per
   process), the pinned offline model, the English-config keyword limitation for Roman Urdu, and pgvector enablement.
@@ -22,6 +22,7 @@ Dependency and tooling changes are listed here too.
 - Repository made public. Branch protection on `main` applied and verified through the API (T24).
 
 ### Fixed
+- `app_user` could set any version's status and point any document at any version of its tenant. The transition guard now allows `app_user` to retire a version and nothing else, and `app_user` loses UPDATE on `documents.current_version_id` (ADR 0026, migration `0010`). The guard's matrix test covers every status pair for both roles.
 - The worker checks the `worker_user` login once at startup. A wrong password stops it with `worker not started: database login failed for worker_user` and exit code 1, instead of a retry loop that kept it running.
 - The test database guard refuses the dev port (5432) unconditionally, even with no dev URL configured, and refuses a psql command that reaches a different cluster than the admin URL (same system identifier check). A test run had reset the dev cluster's login roles (LEARNING_LOG, Session 4).
 - `alembic/env.py` no longer silences existing loggers (`disable_existing_loggers=False`). The default

@@ -4,7 +4,6 @@
   "app_user|column:document_versions.purge_after|UPDATE",
   "app_user|column:document_versions.retired_at|UPDATE",
   "app_user|column:document_versions.status|UPDATE",
-  "app_user|column:documents.current_version_id|UPDATE",
   "app_user|column:documents.deleted_at|UPDATE",
   "app_user|column:documents.purge_after|UPDATE",
   "app_user|column:documents.title|UPDATE",
