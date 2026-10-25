@@ -25,7 +25,8 @@ BEGIN
       'provisioning_definer',
       'retry_definer',
       'swap_definer',
-      'purge_definer'
+      'purge_definer',
+      'queue_cleanup_definer'
     ] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
       EXECUTE format('CREATE ROLE %I NOLOGIN', r);

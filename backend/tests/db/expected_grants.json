@@ -115,6 +115,7 @@
   "worker_user|column:document_versions.processing_token|UPDATE",
   "worker_user|column:document_versions.status|UPDATE",
   "worker_user|column:documents.current_version_id|UPDATE",
+  "worker_user|routine:cleanup_finished_jobs|EXECUTE",
   "worker_user|routine:enqueue_purge_jobs|EXECUTE",
   "worker_user|routine:enqueue_stalled_ingest|EXECUTE",
   "worker_user|routine:retention_due_tenant_ids|EXECUTE",

@@ -712,3 +712,7 @@ The chunks table needs the pgvector extension, and the embedding model runs insi
 1. **Enable pgvector.** The bootstrap SQL runs `CREATE EXTENSION IF NOT EXISTS vector` in each database. Confirm the host offers pgvector and that the extension is created, then confirm the version: `SELECT extversion FROM pg_extension WHERE extname = 'vector';`.
 2. **Memory per process.** The web app and the worker each load the embedding model, about 1.1 GB of RAM per process (measured 2026-10-23 in the same conditions: 1,123 MiB peak). A host with 512 MB of RAM cannot run either process.
 3. **Model files present at build time.** The pinned model is fetched once at build or deploy into the fixed cache directory. Production never downloads at startup. Confirm the image contains the files before the first start.
+
+## Queue cleanup (ADR 0028)
+
+A daily worker task removes **succeeded** queue jobs older than 7 days (`grounded.cleanup_finished_jobs`, run at 03:00 UTC). Failed, cancelled, aborted, queued and running jobs are kept. To see the queue's size, count the rows in `queue.procrastinate_jobs` by `status`. A growing `failed` count is for a person to look at, not a cleanup failure: failed jobs are kept on purpose (ADR 0028).

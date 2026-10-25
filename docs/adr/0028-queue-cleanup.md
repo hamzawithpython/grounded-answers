@@ -1,6 +1,6 @@
 # ADR 0028: Periodic cleanup of finished queue rows
 
-**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 8.
+**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 8; amended in PR 8 (a narrow definer, not the built-in task).
 
 **Date:** 2026-10-24
 
@@ -38,3 +38,11 @@ ADR 0015 (decision 5) asks for periodic deletion of finished jobs. Procrastinate
 ## Related
 
 - ADR 0015 (decision 5), ADR 0016 (queue grants).
+
+## Amendment (PR 8, 2026-10-25): a narrow definer, not the built-in task
+
+- **The built-in `remove_old_jobs` is not granted to the worker.** Verified in the installed 3.10.0 source (`procrastinate/manager.py`, `delete_old_jobs`, and `sql/queries.sql`): the delete needs DELETE on the whole job table, SELECT on every job column and on the event times, and it runs a delete trigger (`procrastinate_unlink_periodic_defers_v1`) that updates `procrastinate_periodic_defers` as the caller. Granting worker_user those would give it rights over every queue row, which is more than the cleanup needs.
+- **Built instead:** `grounded.cleanup_finished_jobs(p_retention_hours)` (migration `0015_queue_cleanup`), owned by a new NOLOGIN role `queue_cleanup_definer`. It deletes **succeeded** jobs whose last event is older than the window (1 to 8760 hours, checked in SQL). worker_user gets EXECUTE on it and nothing else in the queue.
+- **The window is 168 hours (7 days)**, and the cleanup runs daily at 03:00 UTC (`jobs/queue_cleanup.py`).
+- **Failed, cancelled and aborted jobs are kept**, as decided above. Queued and running jobs are never removed. A job with no event at all is kept, because its age is unknown (fail safe).
+- **Periodic links.** The definer holds UPDATE on `procrastinate_periodic_defers.job_id`, which the library's delete trigger needs. The link is cleared and the row is kept.
