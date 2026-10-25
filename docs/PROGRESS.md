@@ -1,6 +1,30 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-26 (Session 4 complete; Session 5 planning approved)
+**Last updated:** 2026-10-26 (Session 4 complete; Session 5 Step 1, retrieval eval harness, in progress on `feat/retrieval-eval-harness`)
+
+## Session 5 status (search and answers with citations)
+
+Plan approved 2026-10-26. Each step has its own branch and PR, and stops for review.
+
+| Step | Work | State |
+|---|---|---|
+| 1 | Retrieval evaluation harness against the test DB (`grounded_answers.evaluation`, `pytest -m eval -s`; smoke test in `-m db`) | Built on `feat/retrieval-eval-harness`, awaiting review. Results in `docs/EVAL.md` |
+| 2 | Decision: retrieval strategy (ADR 0030), then `retrieve()` | Next |
+| 3 | Decision: answer model and provider (ADR 0031) | Planned |
+| 4 | Answer contract, citation validation, refusal | Planned |
+| 5 | `POST /ask` | Planned |
+| 6 | Prompt-injection tests | Planned |
+| 7 | Answer evaluation | Planned |
+
+**Step 1 results (k = 5, 45 pairs):** vector R@5 0.800 / MRR 0.636; keyword 0.733 / 0.633; hybrid (RRF) 0.867 / 0.742. The SPEC target is 0.85, and the ceiling is 0.978 (q045's v1.0 pair is always a miss). The hybrid lead is one or two pairs and differs from the scratch figure (0.76), cause unknown, so it is a hypothesis for Step 2.
+
+**Carry into Step 2:** (1) keyword order among ties is arbitrary unless fixed; the rankers use an md5 of the body as tie-break. (2) Evaluate pgvector `hnsw.iterative_scan` with a larger multi-tenant dataset: HNSW filters after the index scan, so RLS can return fewer than k rows at scale. (3) The vector top-1 scores of answerable and unanswerable questions overlap between 0.82 and 0.84 (Step 4's refusal rule). (4) The web process has no query-embedding path yet (the model, about 1.1 GB, must load there). (5) 180 vs 190 chunks against the scratch set is unexplained.
+
+**Step 2 instructions (approved 2026-10-26):**
+- The ADR 0030 evidence must include the tie-break note (keyword order among ties was arbitrary until the md5 tie-break) and the hybrid caveat: 45 pairs, one pair = 0.022, and the old scratch figure of 0.76 is unexplained.
+- Extend the harness report with recall and MRR at k = 3, 5, 8 and 10 for each ranker, to decide how many chunks go to the answer model. State which of the 6 hybrid misses (q004 4.4, q012 6.2, q022 3.4.1, q045 6.1, q048 11.2, q049 5.4.1) still appear at k = 8 and k = 10. q045 6.1 is always a miss.
+
+**Step 4 instruction:** answerable and unanswerable vector scores overlap (0.82 to 0.84), so refusal cannot rest on a score threshold alone. It needs model judgement plus citation validation.
 
 ## Session 3 complete (2026-10-22)
 

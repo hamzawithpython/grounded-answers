@@ -146,3 +146,59 @@ Peak RAM stays at about 1,122 MiB whatever the options are. So the gap is not ca
 | 2 | on | 126.0 | 1,123.3 |
 
 The peak figures in this table include the corpus loaded earlier in the same process. Compare them only with each other. The current setting, 2 threads with the arena off, is the fastest for indexing. The single-query median is faster with the arena on.
+
+## Retrieval evaluation against the database (Session 5, Step 1, 2026-10-26)
+
+The scratch scripts above are replaced by a harness in the repository (`grounded_answers.evaluation`, run with `uv run pytest -m eval -s`, RUNBOOK). It loads the eight demo documents through the real pipeline into the test database (extract, S1 chunks, the pinned model, write, swap), loading IFL-FIN-007 v1.0 first and v2.0 second so the real swap retires v1. It then asks the 50 questions as `app_user`, so row-level security and the current-version rule apply. A document's ID and version come from its header text. The title is the filename, as in the upload endpoint, and the embedding prefix uses it.
+
+**Rankers.** Vector: cosine similarity with pgvector, exact at this size (the HNSW index is not exercised). Keyword: the question's words stemmed by the English configuration and joined with OR, ranked by `ts_rank_cd` (PostgreSQL has no inverse document frequency, so this is not the BM25 of the tables above). Hybrid: reciprocal rank fusion, k = 60. Each list is fetched to depth 50. Ties are broken by the md5 of the chunk body, then `(version_id, position)`.
+
+**Hit rule and metrics.** As in "Method": same document, current version, the named version when the pair names one, and the clause label as a whole label. Recall@5 and MRR are over the 45 pairs (MRR over the top 50). The v1.0 pair of q045 is always a miss, so the ceiling is 44/45 = 0.978.
+
+### Results (k = 5, 40 answerable questions, 45 pairs)
+
+| Ranker | R@5 | MRR | Latency p50 / p95 | Questions with fewer than 5 rows |
+|---|---|---|---|---|
+| vector | 0.800 (36/45) | 0.636 | 5.8 / 14.1 ms | 0 |
+| keyword | 0.733 (33/45) | 0.633 | 7.1 / 21.9 ms | 1 (q015: 4 rows) |
+| hybrid | 0.867 (39/45) | 0.742 | 13.9 / 28.8 ms | 0 |
+
+Query embedding: p50 22 ms, p95 34 ms. Chunks of a non-current version returned to `app_user`: 0. Latency is the ranker call inside an open transaction on 157 rows; it says nothing about scale.
+
+By question type (R@5 / MRR, pairs):
+
+| Type | vector | keyword | hybrid |
+|---|---|---|---|
+| fact | 0.95 / 0.742 (21) | 0.81 / 0.755 (21) | 0.90 / 0.864 (21) |
+| conditional | 0.57 / 0.510 (7) | 0.71 / 0.473 (7) | 0.86 / 0.576 (7) |
+| cross_document | 0.62 / 0.498 (8) | 0.50 / 0.402 (8) | 0.75 / 0.499 (8) |
+| table | 0.80 / 0.673 (5) | 0.80 / 0.700 (5) | 0.80 / 0.804 (5) |
+| version | 0.75 / 0.531 (4) | 0.75 / 0.653 (4) | 1.00 / 0.800 (4) |
+
+Missed pairs. Vector (9): q004 4.4, q012 6.2, q033 5.2, q044 12.1, q045 1.5.1 and 6.1, q048 11.2, q049 5.4.1, q050 10. Keyword (12): q004, q012, q022 3.4.1, q030 4.2.5, q033, q036 5.4.4, q042 5.4.2, q045 6.1, q047 11.2, q048, q049, q050. Hybrid (6): q004, q012, q022, q045 6.1, q048, q049. Hybrid rescued q033, q044, q045 (1.5.1) and q050, and lost q022.
+
+### Score distributions (for the refusal rule in Step 4)
+
+Top-1 score per question, min / median / max. Scores are not comparable across rankers. Separation is the chance that an answerable question's top-1 score is above an unanswerable one's (1.0 means no overlap).
+
+| Ranker | Answerable top-1 | Unanswerable top-1 | Separation |
+|---|---|---|---|
+| vector (cosine similarity) | 0.820 / 0.860 / 0.909 | 0.811 / 0.833 / 0.840 | 0.915 |
+| keyword (`ts_rank_cd`) | 0.5 / 1.4 / 3.1 | 0.3 / 0.9 / 1.3 | 0.757 |
+| hybrid (RRF) | 0.030 / 0.033 / 0.033 | 0.031 / 0.032 / 0.033 | 0.772 |
+
+The vector ranges overlap between 0.82 and 0.84, so a threshold on this score would refuse some answerable questions. The keyword score depends on the number of query words. The scores of the hit chunks are in the JSON report (`EVAL_REPORT_PATH`).
+
+### Checks on the harness
+
+- **Reproduction.** Vector R@5 0.800 and MRR 0.636, against 0.778 and 0.633 in the scratch evaluation (one pair apart). Keyword R@5 matches (0.733). Keyword MRR differs (0.633 against 0.598), as expected for a different ranking function.
+- **Hybrid differs from the scratch figure** (0.867 against 0.76). The scratch script is gone, so the cause is not known. With 45 pairs, one pair is 0.022. Treat hybrid's lead over vector as a hypothesis for Step 2, not a finding.
+- **Determinism.** Two runs with a random tie-break (the version ID) gave different keyword and hybrid numbers (keyword R@5 0.733 and 0.756; hybrid 0.889 and 0.867), because `ts_rank_cd` has many ties. After the md5 tie-break, two runs were identical apart from latency. Keyword order among ties is arbitrary unless it is fixed (Step 2).
+- **Chunk counts.** The harness loads 180 chunks (157 current, 23 in retired v1.0). The scratch S1 set had 190. The production chunker gives 180 offline too. A size budget of about 1,030 characters would give 190, which fits a script that counted the title prefix against the 1,200. The scratch script is no longer available, so this is consistent with the evidence, not proven.
+- **Planted failures.** Dropping the tenant context made the smoke test fail (the current version's chunks were invisible). Running the same questions as the admin role, which bypasses row-level security, is flagged by the retired-chunk counter (the CI negative control).
+
+### Limits
+
+- One owner-written question set and 45 pairs. Differences of one or two pairs are noise.
+- 157 chunks and one tenant. The HNSW index and RLS filtering at scale are not tested. pgvector's HNSW filters after the index scan, so a filtered query can return fewer than k rows at scale. pgvector 0.8's iterative scans (`hnsw.iterative_scan`) are to be evaluated in Step 2 with a larger, multi-tenant dataset. This harness asserts k rows for the vector and hybrid rankers and reports any shortfall for all three.
+- Latency is for a small table and an idle database.

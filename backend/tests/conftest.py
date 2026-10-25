@@ -33,3 +33,16 @@ def _reset_settings_and_env(monkeypatch: MonkeyPatch) -> Generator[None, None, N
     yield
 
     get_settings.cache_clear()
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Tests marked `eval` need the real model and take minutes, so they run only when -m names `eval`.
+
+    Without this, `-m "not db"` would collect them. They are deselected, not skipped: nothing is hidden when
+    the marker is asked for."""
+    if "eval" in (config.getoption("markexpr") or ""):
+        return
+    dropped = [item for item in items if item.get_closest_marker("eval") is not None]
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = [item for item in items if item not in dropped]
