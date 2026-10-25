@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # Document upload (ADR 0019). Off until the worker runs the ingestion task (Step 6): the
     # endpoint then answers 404, so the switch cannot queue jobs nobody runs.
     upload_enabled: bool = False
+    # Days a deleted document or a replaced version is kept before the purge removes it (ADR 0027). The worker reads
+    # the same variable (worker_config.py), so the two must agree.
+    document_retention_days: int = Field(default=30, ge=1, le=365)
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",

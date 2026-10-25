@@ -15,6 +15,7 @@ once and every job is idempotent.
 """
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 from typing import Final
@@ -28,9 +29,12 @@ from grounded_answers.jobs.app import build_app
 from grounded_answers.jobs.ingest_task import register_ingest_task
 from grounded_answers.jobs.logging_filter import install_job_log_redaction
 from grounded_answers.jobs.stalled import register_stalled_sweep
+from grounded_answers.purge import register_purge
 from grounded_answers.runtime import selector_loop_factory
 from grounded_answers.storage.postgres_store import PostgresObjectStore
 from grounded_answers.worker_config import WorkerSettings
+
+logger = logging.getLogger(__name__)
 
 LOGIN_CHECK_TIMEOUT_SECONDS: Final = 10
 # A failed login is raised by the connection step, so psycopg attaches no SQLSTATE. The server's wording is the signal.
@@ -67,7 +71,15 @@ async def check_worker_login(database_url: str) -> None:
         await engine.dispose()
 
 
-async def serve(*, conninfo: str, database_url: str, model_dir: Path, lease_seconds: int) -> None:
+def log_configuration(retention_days: int) -> None:
+    """One line at startup, so a retention value that differs from the web app's is visible in the worker's log (ADR 0027)."""
+    logger.info("worker.config document_retention_days=%d", retention_days)
+
+
+async def serve(
+    *, conninfo: str, database_url: str, model_dir: Path, lease_seconds: int, retention_days: int
+) -> None:
+    log_configuration(retention_days)
     embedder = load_embedder(model_dir)
     await check_worker_login(database_url)
     engine = create_database_engine(database_url)
@@ -79,8 +91,10 @@ async def serve(*, conninfo: str, database_url: str, model_dir: Path, lease_seco
         object_store=PostgresObjectStore(),
         embedder=embedder,
         lease_seconds=lease_seconds,
+        retention_days=retention_days,
     )
     register_stalled_sweep(app, session_factory=session_factory, lease_seconds=lease_seconds)
+    register_purge(app, session_factory=session_factory)
     try:
         async with app.open_async():
             await app.run_worker_async()
@@ -105,6 +119,7 @@ def main() -> None:
                 database_url=database_url,
                 model_dir=settings.worker_embedding_model_dir,
                 lease_seconds=settings.worker_processing_lease_seconds,
+                retention_days=settings.document_retention_days,
             ),
             loop_factory=selector_loop_factory,
         )

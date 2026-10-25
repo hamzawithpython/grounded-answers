@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from psycopg import errors
 
 from grounded_answers.database import create_database_engine, create_session_factory
-from grounded_answers.documents_api import TEMPORARY_RETENTION_DAYS, retire_document
+from grounded_answers.documents_api import retire_document
 from grounded_answers.embedding.pinned import MODEL_NAME, MODEL_REVISION
 from grounded_answers.ingest.pipeline import IngestJob, Outcome, run_ingestion
 from grounded_answers.models import EMBEDDING_DIMENSIONS
@@ -44,6 +44,10 @@ from .ingest_support import (
     worker_sessions,
 )
 from .seed import Seeded
+
+TEMPORARY_RETENTION_DAYS = (
+    30  # the default of DOCUMENT_RETENTION_DAYS, used here as the expected period
+)
 
 pytestmark = pytest.mark.db
 
@@ -427,6 +431,7 @@ async def test_a_worker_finishing_a_deleted_version_loses_cleanly(
                     tenant_id=seeded.a.tenant,
                     document_id=document,
                     actor_user_id=seeded.a.admin,
+                    retention_days=TEMPORARY_RETENTION_DAYS,
                 )
 
         job = IngestJob(
@@ -435,6 +440,7 @@ async def test_a_worker_finishing_a_deleted_version_loses_cleanly(
             version_id=version,
             attempt_token=uuid.uuid4(),
             lease_seconds=120,
+            retention_days=30,
         )
         # The worker runs as worker_user, as in production. The delete runs as app_user, from the event loop.
         async with worker_sessions(accounts.handle) as worker_factory:

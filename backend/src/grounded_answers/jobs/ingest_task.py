@@ -57,6 +57,7 @@ def register_ingest_task(
     object_store: ObjectStore,
     embedder: Embedder,
     lease_seconds: int,
+    retention_days: int,
 ) -> None:
     retry = procrastinate.RetryStrategy(
         max_attempts=RETRY_MAX_ATTEMPTS,
@@ -80,6 +81,7 @@ def register_ingest_task(
             version_id=uuid.UUID(version_id),
             attempt_token=attempt_token(job_id),
             lease_seconds=lease_seconds,
+            retention_days=retention_days,
         )
         is_last = context.job.attempts >= RETRY_MAX_ATTEMPTS
         try:

@@ -21,5 +21,8 @@ class WorkerSettings(BaseSettings):
     worker_embedding_model_dir: Path | None = None
     # How long an attempt holds a version before another attempt may take it over (ADR 0022, D1).
     worker_processing_lease_seconds: int = Field(default=1200, ge=120, le=7200)
+    # Days a replaced or deleted version is kept before the purge removes it (ADR 0027). The same variable as the web
+    # app reads (Settings.document_retention_days). The swap stamps purge_after with it.
+    document_retention_days: int = Field(default=30, ge=1, le=365)
 
     model_config = SettingsConfigDict(env_file=None, extra="forbid")

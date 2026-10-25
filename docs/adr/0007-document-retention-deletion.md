@@ -108,3 +108,5 @@ These restrictions are RLS policies `TO worker_user`, so they hold even if the c
 - ADR 0005 (`set_config`, RLS)
 - ADR 0006 (test database and bootstrap)
 - ARCHITECTURE.md §5 (lifecycle), §7 (RLS summary)
+
+> Purge mechanics amended by ADR 0027.

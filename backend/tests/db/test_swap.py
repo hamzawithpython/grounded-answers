@@ -20,6 +20,7 @@ from .seed import Seeded
 pytestmark = pytest.mark.db
 
 MARKDOWN = "text/markdown"
+RETENTION_DAYS = 30  # the default of DOCUMENT_RETENTION_DAYS (ADR 0027)
 
 
 def _worker(handle: DbHandle, tenant: uuid.UUID | None) -> psycopg.Connection:
@@ -32,7 +33,7 @@ def _worker(handle: DbHandle, tenant: uuid.UUID | None) -> psycopg.Connection:
 def _swap(handle: DbHandle, tenant: uuid.UUID, document: uuid.UUID, version: uuid.UUID) -> str:
     with _worker(handle, tenant) as worker:
         row = worker.execute(
-            "SELECT grounded.swap_current_version(%s, %s)", (document, version)
+            "SELECT grounded.swap_current_version(%s, %s, %s)", (document, version, RETENTION_DAYS)
         ).fetchone()
         worker.commit()
     assert row is not None
@@ -273,4 +274,46 @@ def test_a_call_without_a_tenant_context_is_refused(
     document, version = document_with_ready
     with pytest.raises(errors.InsufficientPrivilege, match="needs a tenant context"):
         with _worker(grounded_db, None) as worker:
-            worker.execute("SELECT grounded.swap_current_version(%s, %s)", (document, version))
+            worker.execute(
+                "SELECT grounded.swap_current_version(%s, %s, %s)",
+                (document, version, RETENTION_DAYS),
+            )
+
+
+@pytest.mark.parametrize("days", [0, -1, 366])
+def test_the_swap_refuses_a_retention_outside_1_to_365_in_sql(
+    grounded_db: DbHandle,
+    seeded: Seeded,
+    admin: psycopg.Connection,
+    made: Made,
+    document_with_ready: tuple[uuid.UUID, uuid.UUID],
+    days: int,
+) -> None:
+    """The bound is checked in SQL, not only in Python: a caller that skips Settings still cannot stamp a bad period."""
+    document, version = document_with_ready
+    with pytest.raises(errors.InvalidParameterValue, match="between 1 and 365"):
+        with _worker(grounded_db, seeded.a.tenant) as worker:
+            worker.execute(
+                "SELECT grounded.swap_current_version(%s, %s, %s)", (document, version, days)
+            )
+    assert _current(admin, document) == version, "a refused swap changes nothing"
+
+
+@pytest.mark.parametrize("days", [1, 365])
+def test_the_swap_accepts_the_bounds(
+    grounded_db: DbHandle,
+    seeded: Seeded,
+    admin: psycopg.Connection,
+    made: Made,
+    document_with_ready: tuple[uuid.UUID, uuid.UUID],
+    days: int,
+) -> None:
+    document, first = document_with_ready
+    second = _ready_version(admin, made, seeded, document, 2)
+    with _worker(grounded_db, seeded.a.tenant) as worker:
+        row = worker.execute(
+            "SELECT grounded.swap_current_version(%s, %s, %s)", (document, second, days)
+        ).fetchone()
+        worker.commit()
+    assert row == ("current",)
+    assert _status(admin, first)[0] == "retired"

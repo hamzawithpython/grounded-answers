@@ -1,6 +1,6 @@
 # ADR 0027: Purge job for retired versions and deleted documents
 
-**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 7.
+**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 7; amended in PR 7 (the sweep role, the item rules, the setting).
 
 **Date:** 2026-10-24
 
@@ -49,3 +49,15 @@ ARCHITECTURE §5.5 describes the purge as a loop over tenants, with the steps ch
 ## Related
 
 - ADR 0007 (retention), ADR 0017 (worker transaction), ADR 0018 (bytes), ADR 0026 (guard).
+
+## Amendment (PR 7, 2026-10-25): what the build settled
+
+- **The setting replaces both temporary constants.** `DOCUMENT_RETENTION_DAYS` (1 to 365, default 30) is in `Settings` (web app) and in `WorkerSettings` (worker), read from the same variable. The delete endpoint and the swap both stamp `purge_after` with it, and the worker passes it to the swap as an argument. The swap's signature changed to `(document_id, version_id, retention_days)` (migration `0014_purge`), so a retirement can never use a stale constant.
+- **A new role, `purge_definer`, owns the sweep** (`grounded.enqueue_purge_jobs()`), instead of widening `retention_definer`. Its privileges are the queue grants of the enqueueing role, and two read policies that return ids and timestamps. worker_user may execute the function and nothing else.
+- **Items.** A deleted document past its date (kind `document`) and a retired version of a live document past its date (kind `version`). A retired version of a deleted document is covered by its document's job, so it gets no job of its own. The sweep reads each item's due-ness at the time it runs, and a job checks it again under the document lock.
+- **Lock order.** Every purge job locks the document row before it reads or writes any version. This is the order of replacement, the swap and delete (ADR 0024).
+- **One transaction per item.** A failure rolls the whole item back. The rows stay retired, and the next sweep defers the item again. The `purging` state is set inside the transaction, so it is never committed on its own.
+- **A document whose versions are not all removable is refused.** The job raises rather than deleting the document: a deleted document is removed only when none of its versions is left.
+- **Content-free audit.** `document.purged` holds `versions`, `chunks` and `blobs` counts. `document_version.purged` holds `chunks` and `blobs`. Neither holds a title, a filename, or content.
+- **Restores.** After a backup restore, the purge runs again before the app serves users (RUNBOOK, "Restore after a backup"). A due-items query returns the check.
+- **Cadence.** The sweep runs every fifteen minutes. A due item waits at most that long after its date.

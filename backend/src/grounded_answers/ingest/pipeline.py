@@ -76,6 +76,8 @@ class IngestJob:
     version_id: uuid.UUID
     attempt_token: uuid.UUID
     lease_seconds: int
+    # Days a superseded version is kept before the purge (ADR 0027). The swap stamps purge_after with it.
+    retention_days: int
 
 
 @dataclass(frozen=True)
@@ -132,7 +134,9 @@ _LOCK_DOCUMENT: Final = text(
 )
 # The swap (migration 0013): makes this version current if it is newer than the current one, or retires it as
 # superseded. Returns 'current' or 'superseded'.
-_SWAP: Final = text("SELECT grounded.swap_current_version(:document_id, :version_id)")
+_SWAP: Final = text(
+    "SELECT grounded.swap_current_version(:document_id, :version_id, :retention_days)"
+)
 
 
 async def _claim(
@@ -280,7 +284,12 @@ async def _write_ready(
         # pointer and the chunks become visible together, or not at all.
         outcome = (
             await session.execute(
-                _SWAP, {"version_id": job.version_id, "document_id": job.document_id}
+                _SWAP,
+                {
+                    "version_id": job.version_id,
+                    "document_id": job.document_id,
+                    "retention_days": job.retention_days,
+                },
             )
         ).scalar_one()
         await _audit(session, job, "document.ready", {})
