@@ -156,7 +156,7 @@ def test_upgrade_downgrade_upgrade_round_trip(grounded_db: DbHandle, roundtrip_d
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
             "WHERE n.nspname = 'grounded' AND NOT t.tgisinternal"
         ).fetchone()
-        assert triggers == (4,), (
-            "triggers missing after the second upgrade: three updated_at triggers and the worker "
-            "transition guard (ADR 0022)"
+        assert triggers == (5,), (
+            "triggers missing after the second upgrade: three updated_at triggers, the worker "
+            "transition guard (ADR 0022) and the document restore guard (ADR 0025, migration 0012)"
         )

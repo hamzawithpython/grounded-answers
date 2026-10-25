@@ -342,7 +342,7 @@ Answers cite only the current `ready` version. A `queued` or `processing` versio
 
 ### 5.3 Delete
 
-One transaction (ADR 0025): set `documents.deleted_at = now()` and `purge_after = now() + DOCUMENT_RETENTION_DAYS`. Set every version that is not already `retired` or `purging` to `retired` with `retired_at` and `purge_after`. Write audit entry `document.delete` (counts only, no title, no filename). After commit, retrieval excludes the document (section 5.6). A deleted or unknown document returns 404.
+One transaction (ADR 0025): set `documents.deleted_at = now()` and `purge_after = now() + DOCUMENT_RETENTION_DAYS`. Set every version that is not already `retired` or `purging` to `retired` with `retired_at` and `purge_after`. Write audit entry `document.delete` (counts only, no title, no filename). After commit, retrieval excludes the document (section 5.6). A deleted or unknown document returns 404, with the same body. A repeat delete changes nothing. Migration 0012 refuses any attempt by a guarded role to clear `deleted_at`, so a delete cannot be undone through the database (ADR 0025, amendment). Retention is `TEMPORARY_RETENTION_DAYS` (30) in `documents_api.py` until PR 7 adds `DOCUMENT_RETENTION_DAYS`.
 
 **Restore is not supported in v1.**
 

@@ -23,6 +23,7 @@ from typing import Any, Final
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException
 from starlette.formparsers import MultiPartException
@@ -32,6 +33,7 @@ from grounded_answers.config import get_settings
 from grounded_answers.jobs.enqueue import enqueue_job
 from grounded_answers.jobs.tasks import INGEST_DOCUMENT
 from grounded_answers.rate_limit import LimiterUnavailable
+from grounded_answers.rowcount import affected_rows, expect_rowcount
 from grounded_answers.storage.object_store import ObjectStore
 from grounded_answers.upload.detect import CONTENT_TYPE, UnsupportedFileType, detect_kind
 from grounded_answers.upload.limits import (
@@ -47,6 +49,10 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 _TITLE_CHARS: Final = 200
 _ORIGINAL_FILENAME_CHARS: Final = 255
+
+# TEMPORARY (ADR 0027, PR 4): the retention period for a deleted document, until PR 7 adds
+# DOCUMENT_RETENTION_DAYS to Settings (1 to 365, default 30). Replace this constant with that setting.
+TEMPORARY_RETENTION_DAYS: Final = 30
 
 _FIND_DUPLICATE: Final = text(
     "SELECT d.id FROM grounded.documents AS d "
@@ -178,3 +184,97 @@ async def upload_document(request: Request, ctx: AuthenticatedRequest) -> Respon
         "status": "queued",
     }
     return JSONResponse(status_code=201, content=body)
+
+
+# ---- DELETE /documents/{id} (ADR 0025) ----
+
+# Marks a live document deleted. The condition deleted_at IS NULL makes a second delete change nothing.
+_MARK_DOCUMENT_DELETED: Final = text(
+    "UPDATE grounded.documents SET deleted_at = now(), "
+    "purge_after = now() + make_interval(days => :days) "
+    "WHERE id = :document_id AND tenant_id = :tenant_id AND deleted_at IS NULL"
+)
+# Retires every version that is not already retired or purging. Those keep the retirement time they have.
+_RETIRE_VERSIONS: Final = text(
+    "UPDATE grounded.document_versions SET status = 'retired', retired_at = now(), "
+    "purge_after = now() + make_interval(days => :days) "
+    "WHERE document_id = :document_id AND tenant_id = :tenant_id "
+    "AND status IN ('queued', 'processing', 'ready', 'failed')"
+)
+_INSERT_DELETE_AUDIT: Final = text(
+    "INSERT INTO grounded.audit_log (id, tenant_id, actor_user_id, action, target_type, target_id, "
+    "detail) VALUES (:id, :tenant_id, :actor_user_id, 'document.delete', 'document', :target_id, "
+    "CAST(:detail AS jsonb))"
+)
+
+
+async def retire_document(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    document_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+) -> int | None:
+    """
+    Delete one live document inside the caller's tenant transaction (ADR 0025). Returns the number of versions
+    retired, or None when there was no live document to delete (unknown, already deleted, or another tenant's).
+
+    Nothing is written in the None case. The audit row holds counts only: no title, no filename.
+    """
+    marked = await session.execute(
+        _MARK_DOCUMENT_DELETED,
+        {
+            "days": TEMPORARY_RETENTION_DAYS,
+            "document_id": str(document_id),
+            "tenant_id": str(tenant_id),
+        },
+    )
+    if affected_rows(marked) == 0:
+        return None
+    expect_rowcount(marked, 1, "document.delete")
+    retired = await session.execute(
+        _RETIRE_VERSIONS,
+        {
+            "days": TEMPORARY_RETENTION_DAYS,
+            "document_id": str(document_id),
+            "tenant_id": str(tenant_id),
+        },
+    )
+    versions_retired = affected_rows(retired)
+    await session.execute(
+        _INSERT_DELETE_AUDIT,
+        {
+            "id": str(uuid.uuid4()),
+            "tenant_id": str(tenant_id),
+            "actor_user_id": str(actor_user_id),
+            "target_id": str(document_id),
+            "detail": json.dumps({"versions_retired": versions_retired}),
+        },
+    )
+    return versions_retired
+
+
+@router.delete("/{document_id}", response_model=None, status_code=204)
+async def delete_document(document_id: uuid.UUID, ctx: AuthenticatedRequest) -> Response:
+    """
+    Delete a document: 204 when it was live, 404 otherwise.
+
+    404 answers an unknown document, a document that is already deleted, and another tenant's document with the
+    same body. RLS hides another tenant's rows, so the first two cases are the only ones the caller can distinguish.
+    A repeated delete is a 404 rather than a 204, because after the first delete the document is absent to every
+    read: retrieval excludes it (ARCHITECTURE 5.6), and GET /documents will too (PR 5, ADR 0029). A 204 would say
+    that a deleted document id still names something. A 404 says only what a read would say. The state is the same either way, so the operation
+    stays idempotent: deleting twice leaves one deleted document.
+    """
+    principal = ctx.principal
+    if principal.role != "tenant_admin":
+        return _error(403, "Forbidden")
+    versions = await retire_document(
+        ctx.session,
+        tenant_id=principal.tenant_id,
+        document_id=document_id,
+        actor_user_id=principal.user_id,
+    )
+    if versions is None:
+        return _error(404, "Not Found")
+    return Response(status_code=204)
