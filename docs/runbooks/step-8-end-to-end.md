@@ -105,19 +105,20 @@ function Set-MigrationUrl {
 Set-MigrationUrl
 uv run --directory backend alembic upgrade head
 if ($LASTEXITCODE -ne 0) { throw "migration failed" }
-Remove-Item Env:MIGRATION_DATABASE_URL
 ```
 
 **Expected:** a line for each migration that runs, the last one being `Running upgrade 0014_purge -> 0015_queue_cleanup, Queue cleanup: ...`, then no `ERROR`. The exit code is 0.
 
-Confirm the head:
+Confirm the head. `alembic current` needs `MIGRATION_DATABASE_URL`, so the variable is removed only after it runs:
 
 ```powershell
 uv run --directory backend alembic current
+if ($LASTEXITCODE -ne 0) { throw "alembic current failed" }
 docker compose exec -T postgres psql -U postgres -d grounded_answers -At -c "SELECT version_num FROM grounded.alembic_version;"
+Remove-Item Env:MIGRATION_DATABASE_URL
 ```
 
-**Expected:** `0015_queue_cleanup (head)` from `alembic current`, and `0015_queue_cleanup` from psql.
+**Expected:** `0015_queue_cleanup (head)` from `alembic current`, and `0015_queue_cleanup` from psql. The last command prints nothing and removes the migration URL from this shell.
 
 **If it fails:**
 - `schema queue is missing` or `extensions` errors: a bootstrap step is missing. Run the database bootstrap for the earlier sessions (RUNBOOK "Dev database bootstrap", steps 5 and 6), then migrate again.
@@ -174,7 +175,9 @@ if ($lines -match "^UPLOAD_ENABLED=") {
 } else {
     $lines += "UPLOAD_ENABLED=true"
 }
-Set-Content -Path $envFile -Value $lines -Encoding utf8
+# Windows PowerShell 5.1's "-Encoding utf8" writes a byte-order mark (BOM) first. Other tools may read it as part of
+# the first key, so write the file as UTF-8 without a BOM.
+[IO.File]::WriteAllLines((Resolve-Path $envFile), [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
 Select-String -Path $envFile -Pattern "^UPLOAD_ENABLED="
 ```
 
@@ -426,7 +429,14 @@ IFL-FIN-007_expense-policy_v1.0.docx|2|ready|t|f
 
 (The title is the file name, and it is the same on both rows.) Row 1 is retired, not current, and retired. Row 2 is current and not retired.
 
-The second query shows one swap row: `current|1`. Version 2's number is higher, so it becomes current, and version 1 is retired once.
+The second query shows **two** swap rows, one per version that became current:
+
+```text
+current|0
+current|1
+```
+
+The first row is version 1, which became current at its first ingest (its `retired` value is 0). The second row is the replacement, version 2, which made version 1 retired (`retired` is 1). Each swap that makes a version current writes one row, so the count of swap rows always equals the number of versions that became current.
 
 **If it fails:**
 - The first query shows version 1 still current: the swap did not run, or version 2 is not `ready`. Check `latest_version_status` in the list first.
@@ -449,7 +459,7 @@ $tenantId = docker compose exec -T postgres psql -U postgres -d grounded_answers
 ### 8a. Chunk counts per document and version (admin view)
 
 ```powershell
-docker compose exec -T postgres psql -U postgres -d grounded_answers -c "SELECT d.title, v.version_no, v.status, count(c.id) AS chunks FROM grounded.documents d JOIN grounded.document_versions v ON v.document_id = d.id LEFT JOIN grounded.chunks c ON c.version_id = v.id WHERE d.tenant_id = '$tenantId' AND d.deleted_at IS NULL GROUP BY d.title, v.version_no, v.status ORDER BY d.title, v.version_no;"
+docker compose exec -T postgres psql -U postgres -d grounded_answers -c "SELECT d.title, v.version_no, v.status, count(c.position) AS chunks FROM grounded.documents d JOIN grounded.document_versions v ON v.document_id = d.id LEFT JOIN grounded.chunks c ON c.version_id = v.id WHERE d.tenant_id = '$tenantId' AND d.deleted_at IS NULL GROUP BY d.title, v.version_no, v.status ORDER BY d.title, v.version_no;"
 ```
 
 **Expected:** one row per document and version, with `ready` rows having `chunks` above zero, and `retired` (version 1 of Expense) keeping its chunks in the database (they are hidden from retrieval, not deleted). The exact numbers are not known in advance: record them. A `ready` row with `0` chunks is a failure: send me the title.
@@ -462,7 +472,7 @@ docker compose exec -T postgres psql -U postgres -d grounded_answers -c "SELECT 
 
 **Expected:** `with_clause_label` above zero for documents with numbered clauses (the policies have them). A document with `0` labels is not a failure by itself: it may have no numbered clauses. Record it, and I will check the text.
 
-The chunks table keys on the version (it has no `document_id`), so the query joins through `document_versions`.
+The chunks table keys on the version (it has no `document_id`), so the query joins through `document_versions`. It also has no `id` column: its primary key is `(tenant_id, version_id, position)`, so the queries count `position`.
 
 ### 8c. What app_user can see (the retrieval rule)
 
@@ -471,7 +481,11 @@ Retrieval runs as `app_user` and sees only chunks of the current, ready version 
 ```powershell
 $appSecure = Read-Host "app_user password" -AsSecureString
 $appPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($appSecure))
-docker compose exec -T -e "PGPASSWORD=$appPlain" postgres psql -h 127.0.0.1 -U app_user -d grounded_answers -c "SELECT set_config('app.current_tenant', '$tenantId', false); SELECT d.title, v.version_no, count(c.id) AS visible_chunks FROM grounded.chunks c JOIN grounded.document_versions v ON v.id = c.version_id JOIN grounded.documents d ON d.id = v.document_id GROUP BY d.title, v.version_no ORDER BY d.title, v.version_no;"
+# The password goes into the environment of this shell, and docker passes it by name (-e PGPASSWORD). It never
+# appears on the docker command line, where other processes could read it.
+$env:PGPASSWORD = $appPlain
+docker compose exec -T -e PGPASSWORD postgres psql -h 127.0.0.1 -U app_user -d grounded_answers -c "SELECT set_config('app.current_tenant', '$tenantId', false); SELECT d.title, v.version_no, count(c.position) AS visible_chunks FROM grounded.chunks c JOIN grounded.document_versions v ON v.id = c.version_id JOIN grounded.documents d ON d.id = v.document_id GROUP BY d.title, v.version_no ORDER BY d.title, v.version_no;"
+Remove-Item Env:PGPASSWORD
 Remove-Variable appPlain, appSecure
 ```
 
@@ -504,13 +518,13 @@ docker compose exec -T postgres psql -U postgres -d grounded_answers -c "SELECT 
 ```text
      action          | count
 ---------------------+-------
- document.ready      |     N
- document.swap       |     1
+ document.ready      |     8
+ document.swap       |     8
  document.upload     |     7
  document_version.upload | 1
 ```
 
-Here `N` is the number of documents that reached `ready` (7 uploads and 1 replacement that succeeded, so N is 8 when all ran). `document.swap` is 1. These are counts only: no titles, no filenames, no content.
+`document.ready` is the number of versions that reached `ready`: the 7 first versions and the replacement, so 8. `document.swap` is the number of versions that became current, which is also 8: each first version became current when it was ready, and the replacement became current when it was swapped in. So in a full run, `document.swap` equals `document.ready`. These are counts only: no titles, no filenames, no content.
 
 ---
 

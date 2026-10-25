@@ -23,19 +23,33 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 
 | Step | Work | State |
 |---|---|---|
-| 1a | Migration `0005` (Procrastinate 3.10.0 in schema `queue`), grants, catalog guard, connector and enqueue tests (ADR 0016) | 🟡 PR open on `feat/job-queue-foundation`, awaiting review. 119 unit and 182 DB tests pass. |
-| 1b-i | `WorkerSettings` (env only), worker entry point as `worker_user`, `begin_worker_transaction`, redacting log filter, migration `0006` (prune grant) (ADR 0017) | 🟡 Built on `feat/worker-enqueue-1b`. Not committed, awaiting review. |
-| 1b-ii | Enqueue on the tenant transaction (outbox), UUID-only arguments, task allowlist (empty until ingestion), web app log redaction, rollback guarantee, poison-job rule with a test-only task (ADR 0017 amendment) | 🟡 Built on `feat/enqueue-poison-1b-ii`. Not committed, awaiting review. Unit 145, DB 198 passed. Planted separate-connection enqueue made the rollback test fail, then removed. |
-| 2a | File storage decided (ADR 0018: bytes in PostgreSQL, B2 as the scale-up path). Migration 0007: `document_blobs`, grants, policies, checks, model, tests | 🟡 Built on `feat/document-storage-2`. Not committed. Full gates pending. |
-| 2b | `ObjectStore`, `PostgresObjectStore` (caller's tenant transaction), in-memory fake, contract test, rowcount allowed set (ADR 0018, amendment 2) | 🟡 Built on `feat/object-store-2b`. Not committed. Unit and contract tests pass; full gates pending. |
-| 3 | Upload endpoint `POST /documents` (ADR 0019): tenant_admin, streaming 10 MiB cap, type from bytes, sanitised filename, duplicates (live only), one transaction with the outbox job, rate limits. Off until Step 6 (`UPLOAD_ENABLED=false`). | 🟡 Built on `feat/upload-endpoint-3`. Not committed. Full gates pending. |
-| 4 | Text extraction (ADR 0020): pypdf, python-docx, markdown-it-py in a child process with timeouts and a Linux memory limit; DOCX XXE and billion-laughs tested; no-text PDFs refused (SPEC §6.1 limitation, awaiting approval of the wording) | 🟡 Built on `feat/extraction-4`. Not committed. Linux container run: 45 passed, demo set under 1 GiB. |
+| 1a | Migration `0005` (Procrastinate 3.10.0 in schema `queue`), grants, catalog guard, connector and enqueue tests (ADR 0016) | ✅ Merged (PR #23). 119 unit and 182 DB tests passed at review. |
+| 1b-i | `WorkerSettings` (env only), worker entry point as `worker_user`, `begin_worker_transaction`, redacting log filter, migration `0006` (prune grant) (ADR 0017) | ✅ Merged (PR #25). |
+| 1b-ii | Enqueue on the tenant transaction (outbox), UUID-only arguments, task allowlist (empty until ingestion), web app log redaction, rollback guarantee, poison-job rule with a test-only task (ADR 0017 amendment) | ✅ Merged (PR #26). Unit 145, DB 198 passed at review. Planted separate-connection enqueue made the rollback test fail, then removed. |
+| 2a | File storage decided (ADR 0018: bytes in PostgreSQL, B2 as the scale-up path). Migration 0007: `document_blobs`, grants, policies, checks, model, tests | ✅ Merged (PR #27). |
+| 2b | `ObjectStore`, `PostgresObjectStore` (caller's tenant transaction), in-memory fake, contract test, rowcount allowed set (ADR 0018, amendment 2) | ✅ Merged (PR #28). |
+| 3 | Upload endpoint `POST /documents` (ADR 0019): tenant_admin, streaming 10 MiB cap, type from bytes, sanitised filename, duplicates (live only), one transaction with the outbox job, rate limits. Off until Step 6 (`UPLOAD_ENABLED=false`). | ✅ Merged (PR #29). |
+| 4 | Text extraction (ADR 0020): pypdf, python-docx, markdown-it-py in a child process with timeouts and a Linux memory limit; DOCX XXE and billion-laughs tested; no-text PDFs refused (SPEC §6.1 limitation, awaiting approval of the wording) | ✅ Merged (PR #30). Linux container run: 45 passed, demo set under 1 GiB. |
 | 5 | Embedding model and chunking (ADR 0021, `docs/EVAL.md`): multilingual-e5-small, S1 chunks. Chunks table: extensions schema and pgvector (bootstrap), migration `0008_chunks` | ✅ Merged (PR #32 docs, PR #33 chunks table). Retrieval strategy is Session 5. |
-| 6 | Ingestion worker (ADR 0022): lease and fencing token, one-transaction write, retries, `embedding` failure reason (amends ADR 0020), pinned model files with hash checks, migration `0009_ingestion_lease`, CI model cache | 🟡 Built on `feat/ingestion-worker`. Gates and CI pending. Upload stays off until Step 8. |
-| 7 | Replace, delete, purge and the retry that closes R20 (ADR 0023 to 0029). Decisions approved 2026-10-24. Build order: PR 1 docs (ADRs, merged as #39); PR 2 per-role transition guard and app_user grant revoke (migration 0010, merged as #40); PR 3 stalled-version retry (migration 0011, definer `enqueue_stalled_ingest`; ADR 0023 amended), with the child-environment fix and the bootstrap split (merged as #41); PR 4 delete (migration 0012 restore guard; `DELETE /documents/{id}`; ADR 0025 amended; merged as #42); PR 5 document list (`GET /documents`, ADR 0029 amended; merged as #43); PR 6 replace and swap (merged as #44; migration 0013); PR 7 purge (merged as #45; migration 0014); PR 8 queue cleanup (definer `cleanup_finished_jobs`, daily; ADR 0028 amended; in review on `feat/queue-cleanup`); PR 5 list; PR 6 replace and swap (definer `swap_current_version`); PR 7 purge and `DOCUMENT_RETENTION_DAYS`; PR 8 queue cleanup. | 🟡 PR 3 in review. |
+| 6 | Ingestion worker (ADR 0022): lease and fencing token, one-transaction write, retries, `embedding` failure reason (amends ADR 0020), pinned model files with hash checks, migration `0009_ingestion_lease`, CI model cache | ✅ Merged (PR #34). Upload was off until Step 8. |
+| 7 | Replace, delete, purge and the retry that closes R20 (ADR 0023 to 0029). Decisions approved 2026-10-24. Build order: PR 1 docs (ADRs, merged as #39); PR 2 per-role transition guard and app_user grant revoke (migration 0010, merged as #40); PR 3 stalled-version retry (migration 0011, definer `enqueue_stalled_ingest`; ADR 0023 amended), with the child-environment fix and the bootstrap split (merged as #41); PR 4 delete (migration 0012 restore guard; `DELETE /documents/{id}`; ADR 0025 amended; merged as #42); PR 5 document list (`GET /documents`, ADR 0029 amended; merged as #43); PR 6 replace and swap (merged as #44; migration 0013); PR 7 purge (merged as #45; migration 0014); PR 8 queue cleanup (definer `cleanup_finished_jobs`, daily; ADR 0028 amended; merged as #46); PR 9 is the sweep timer (merged as #50). | ✅ Merged (PRs #39 to #46 and #50). |
 
 **Dev actions before PR 3 is migrated (the operator runs these, in this order):** run RUNBOOK step 4b (`bootstrap_definer_roles.sql`, no secrets) to create `retry_definer`, then `alembic upgrade head`. Step 4a (login roles) is unchanged. The dev database must be at `0010` before `0011`: migration 0010 is merged, so run `alembic upgrade head` once after step 4b and it applies both.
-| 8 | End-to-end with `demo-data/`, `UPLOAD_ENABLED` on | Not started |
+| 8 | End-to-end with `demo-data/`, `UPLOAD_ENABLED` on | ✅ Live run on the dev machine, results below. Runbook fixes in PR #49 (awaiting merge). |
+
+**Session 4 is complete (2026-10-26).** Every step is merged. Step 8 ran end to end on the dev machine with the real model, the real worker and `UPLOAD_ENABLED` on. The only open PR from this session is #49 (runbook fixes), which is awaiting merge.
+
+**Step 8 live run (recorded 2026-10-26, by the user on the dev machine):**
+- 7 uploads returned 201, and all 7 became `ready` (9 to 18 s each).
+- The replacement (version 2) of IFL-FIN-007 returned 201. The swap was correct: version 1 retired, version 2 current.
+- Chunks per version: 23 (version 1, retired), then 25, 30, 24, 25, 18, 18, 17. Every chunk has a clause label.
+- `document.ready` is 8 and `document.swap` is 8: one swap for each version that became current (runbook 8e).
+- `app_user` sees only current versions. The Expense Policy shows version 2 only.
+
+**Found in the run, and fixed:**
+- The worker crashed at startup with `permission denied` for the periodic deferrer. Fixed in #50: the three sweeps run on an in-process timer, and no periodic task is registered.
+- Three worker log lines were missing: `worker.config`, `purge.sweep` and `ingest.ready`. Fixed in #51. A real-process test now checks every startup line and the ingest success line.
+- Runbook errors: Step 1c (run `alembic current` before removing the migration URL), 3a (BOM-free `.env`), the Step 7 and 8e swap counts, 8a (`chunks` has no `id` column; count `position`), and 8c (the password went on the docker command line). All of these are in PR #49.
 
 **Known limits to revisit with evidence (ADR 0020):** PDF tables are text in v1 (D-A). If Session 5 PDF table questions fail, pdfplumber is the first candidate. PDF heading levels use font size only for unnumbered headings. Windows development has no memory limit (SECURITY R19).
 
@@ -72,7 +86,7 @@ failed once in three full DB runs. Being fixed in a separate PR before Step 1b (
 ## Later improvements (not yet scheduled)
 
 - **Failed-job retention (ADR 0028, decided in PR 8).** Failed queue jobs are kept indefinitely, for diagnosis, so they can grow without bound. Add a separate, longer retention window for failed jobs (30 to 90 days, to be chosen), in its own definer or as a second argument to `cleanup_finished_jobs`, with the same exact-grant tests as PR 8. Not scheduled.
-- **Worker sweep timer (PR 9).** The sweeps moved from Procrastinate periodic tasks to an in-process timer after Step 8 found the worker crashing at startup. Integration test added. Under review on `fix/worker-sweep-timer`.
+- **Worker sweep timer (PR 9).** The sweeps moved from Procrastinate periodic tasks to an in-process timer after Step 8 found the worker crashing at startup. Integration test added. Merged as PR #50.
 - **Separate `valkey-test` service in the test profile.** The test Valkey shares the dev Valkey container, on
   database 15, and the test fixture flushes that database. Postgres already has a separate `postgres-test`
   service on port 5433. Mirror that for Valkey, so tests never touch the dev instance's data (ADR 0006 pattern).
