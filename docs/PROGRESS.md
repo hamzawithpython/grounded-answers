@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-24 (Session 4: PR #38 merged, dev database at migration 0009, Step 7 planning, no code yet)
+**Last updated:** 2026-10-26 (Session 4 complete; Session 5 planning approved)
 
 ## Session 3 complete (2026-10-22)
 
@@ -34,7 +34,6 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 | 6 | Ingestion worker (ADR 0022): lease and fencing token, one-transaction write, retries, `embedding` failure reason (amends ADR 0020), pinned model files with hash checks, migration `0009_ingestion_lease`, CI model cache | ✅ Merged (PR #34). Upload was off until Step 8. |
 | 7 | Replace, delete, purge and the retry that closes R20 (ADR 0023 to 0029). Decisions approved 2026-10-24. Build order: PR 1 docs (ADRs, merged as #39); PR 2 per-role transition guard and app_user grant revoke (migration 0010, merged as #40); PR 3 stalled-version retry (migration 0011, definer `enqueue_stalled_ingest`; ADR 0023 amended), with the child-environment fix and the bootstrap split (merged as #41); PR 4 delete (migration 0012 restore guard; `DELETE /documents/{id}`; ADR 0025 amended; merged as #42); PR 5 document list (`GET /documents`, ADR 0029 amended; merged as #43); PR 6 replace and swap (merged as #44; migration 0013); PR 7 purge (merged as #45; migration 0014); PR 8 queue cleanup (definer `cleanup_finished_jobs`, daily; ADR 0028 amended; merged as #46); PR 9 is the sweep timer (merged as #50). | ✅ Merged (PRs #39 to #46 and #50). |
 
-**Dev actions before PR 3 is migrated (the operator runs these, in this order):** run RUNBOOK step 4b (`bootstrap_definer_roles.sql`, no secrets) to create `retry_definer`, then `alembic upgrade head`. Step 4a (login roles) is unchanged. The dev database must be at `0010` before `0011`: migration 0010 is merged, so run `alembic upgrade head` once after step 4b and it applies both.
 | 8 | End-to-end with `demo-data/`, `UPLOAD_ENABLED` on | ✅ Live run on the dev machine, results below. Runbook fixes in PR #49 (awaiting merge). |
 
 **Session 4 is complete (2026-10-26).** Every step is merged. Step 8 ran end to end on the dev machine with the real model, the real worker and `UPLOAD_ENABLED` on. The only open PR from this session is #49 (runbook fixes), which is awaiting merge.
