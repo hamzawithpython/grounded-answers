@@ -42,7 +42,9 @@ from grounded_answers.runtime import selector_loop_factory
 from grounded_answers.storage.postgres_store import PostgresObjectStore
 from grounded_answers.worker_config import WorkerSettings
 
-logger = logging.getLogger(__name__)
+# Not __name__: the worker runs as "python -m grounded_answers.jobs.worker", where __name__ is "__main__", and no
+# handler covers that name. The explicit name keeps these lines under grounded_answers.jobs (ADR 0017).
+logger = logging.getLogger("grounded_answers.jobs.worker")
 
 LOGIN_CHECK_TIMEOUT_SECONDS: Final = 10
 # A failed login is raised by the connection step, so psycopg attaches no SQLSTATE. The server's wording is the signal.
