@@ -12,25 +12,32 @@ files are missing or do not match their pins. It also checks the database login 
 password stops the worker with a clear message instead of a retry loop. Windows cannot stop the worker
 gracefully (upstream limit, ADR 0015): stop it by its process ID. That is safe, because delivery is at least
 once and every job is idempotent.
+
+The three sweeps run in this process, on a timer (jobs/sweeps.py, ADR 0023, ADR 0027, ADR 0028). They are plain calls to
+their definers, so the worker needs no Procrastinate periodic rights.
+
+The keyword arguments of serve() other than the settings exist for the tests (embedder, schedule, configure,
+install_signal_handlers). main() passes none of them, so production always loads the real model.
 """
 
 import asyncio
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
+import procrastinate
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from grounded_answers.database import create_database_engine, create_session_factory
-from grounded_answers.embedding.model import ModelIntegrityError, load_embedder
+from grounded_answers.embedding.model import Embedder, ModelIntegrityError, load_embedder
 from grounded_answers.jobs.app import build_app
 from grounded_answers.jobs.ingest_task import register_ingest_task
 from grounded_answers.jobs.logging_filter import install_job_log_redaction
-from grounded_answers.jobs.queue_cleanup import register_queue_cleanup
-from grounded_answers.jobs.stalled import register_stalled_sweep
-from grounded_answers.purge import register_purge
+from grounded_answers.jobs.sweeps import SweepSchedule, build_sweeps, start_sweeps, stop_sweeps
+from grounded_answers.purge import register_purge_task
 from grounded_answers.runtime import selector_loop_factory
 from grounded_answers.storage.postgres_store import PostgresObjectStore
 from grounded_answers.worker_config import WorkerSettings
@@ -78,10 +85,28 @@ def log_configuration(retention_days: int) -> None:
 
 
 async def serve(
-    *, conninfo: str, database_url: str, model_dir: Path, lease_seconds: int, retention_days: int
+    *,
+    conninfo: str,
+    database_url: str,
+    lease_seconds: int,
+    retention_days: int,
+    model_dir: Path | None = None,
+    embedder: Embedder | None = None,
+    schedule: SweepSchedule | None = None,
+    install_signal_handlers: bool = True,
+    configure: Callable[[procrastinate.App], None] | None = None,
 ) -> None:
+    """
+    Run the worker until it stops. Production passes model_dir and no embedder, so the real model is loaded here.
+
+    `embedder`, `schedule`, `install_signal_handlers` and `configure` are for the tests. `configure` is called with the
+    app before the worker runs; the integration test uses it to plant a defect (PR 9's planted failure).
+    """
     log_configuration(retention_days)
-    embedder = load_embedder(model_dir)
+    if embedder is None:
+        if model_dir is None:
+            raise ValueError("serve needs a model directory, or an embedder for tests")
+        embedder = load_embedder(model_dir)
     await check_worker_login(database_url)
     engine = create_database_engine(database_url)
     session_factory = create_session_factory(engine)
@@ -94,13 +119,20 @@ async def serve(
         lease_seconds=lease_seconds,
         retention_days=retention_days,
     )
-    register_stalled_sweep(app, session_factory=session_factory, lease_seconds=lease_seconds)
-    register_purge(app, session_factory=session_factory)
-    register_queue_cleanup(app, session_factory=session_factory)
+    register_purge_task(app, session_factory=session_factory)
+    if configure is not None:
+        configure(app)
+    sweeps = build_sweeps(
+        session_factory=session_factory,
+        lease_seconds=lease_seconds,
+        schedule=schedule if schedule is not None else SweepSchedule(),
+    )
+    started = start_sweeps(sweeps)
     try:
         async with app.open_async():
-            await app.run_worker_async()
+            await app.run_worker_async(install_signal_handlers=install_signal_handlers)
     finally:
+        await stop_sweeps(started)
         await engine.dispose()
 
 

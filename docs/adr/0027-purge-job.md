@@ -61,3 +61,7 @@ ARCHITECTURE §5.5 describes the purge as a loop over tenants, with the steps ch
 - **Content-free audit.** `document.purged` holds `versions`, `chunks` and `blobs` counts. `document_version.purged` holds `chunks` and `blobs`. Neither holds a title, a filename, or content.
 - **Restores.** After a backup restore, the purge runs again before the app serves users (RUNBOOK, "Restore after a backup"). A due-items query returns the check.
 - **Cadence.** The sweep runs every fifteen minutes. A due item waits at most that long after its date.
+
+## Amendment (PR 9, 2026-10-25): the purge sweep runs on the worker's timer
+
+The purge sweep is no longer a Procrastinate periodic task (the periodic deferrer needs rights worker_user must not have; see ADR 0023's amendment). The sweep, `grounded.enqueue_purge_jobs`, is called by the worker's timer every 15 minutes, starting at worker start. The purge job itself, `grounded.purge_item`, is still a Procrastinate job, deferred by the sweep, and it is unchanged: one transaction per item, document row first.

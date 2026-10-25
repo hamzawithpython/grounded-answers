@@ -548,6 +548,16 @@ The refresh cookie is `__Secure-refresh`. Browsers keep it only when it carries 
 
 ## Background worker (ADR 0017, Session 4 Step 1b-i)
 
+**The sweeps (ADR 0023, 0027, 0028, as amended in PR 9).** The worker runs three sweeps in its own process, on a timer. Each is one call to its narrow definer, so the worker needs no Procrastinate periodic rights. Each sweep runs once when the worker starts, then on its interval:
+
+| Sweep | Interval | Log line when it runs |
+|---|---|---|
+| stalled-version retry | every 5 minutes | `ingest.stalled_sweep enqueued=N already_waiting=M` |
+| purge | every 15 minutes | `purge.sweep enqueued=N already_waiting=M` |
+| queue cleanup | every 24 hours | `queue.cleanup removed=N retention_hours=168` |
+
+Rules: a sweep never overlaps itself. A tick that arrives while the previous run is still going is skipped, and logged as `sweep.skipped`. A failure is logged as `sweep.failed name=<sweep> error=<exception class>`, with no message and no ids, and the timer keeps running. Three failures in a row log `sweep.repeated_failure ...` at warning level. A failure that repeats is for a person to look at: check the database connection and the worker window before anything else.
+
 The worker reads `DOCUMENT_RETENTION_DAYS` (1 to 365, default 30) from the shell environment, as the web app does. The swap stamps each retirement with it, and the purge removes items when their period has passed (ADR 0027). Set it to the same value in both places.
 
 **The web app and the worker must have the same `DOCUMENT_RETENTION_DAYS`.** A different value gives different retention periods to rows retired by the web app (delete) and by the worker (replacement swap). The worker logs its value at startup as `worker.config document_retention_days=N`: check that line against the web app's setting after every change. The swap also refuses any value outside 1 to 365 in SQL, so a bad value cannot reach a row.
@@ -657,7 +667,7 @@ The four required checks are the merge gate. Required approvals are `0` because 
 
 A backup holds deleted content until the provider's backup window expires (SECURITY.md, ADR 0007). A restore therefore brings back documents whose purge date has passed. Until the purge job exists, **do not restore user data from a backup**.
 
-**The purge job exists now (ADR 0027).** The restore rule is: **after any restore from backup, run the purge again before the app serves users.** A restore brings back documents and versions whose purge date has passed, and the purge removes them again. The procedure:1. Restore into a new database, never over the live one.2. Start the worker against the restored database, with `DOCUMENT_RETENTION_DAYS` set to the value the live system uses. The purge sweep runs every 15 minutes, so wait for two sweep marks (the worker logs `purge.sweep`).3. Check that nothing due is left. This query must return `0`:   ```sql   SELECT (SELECT count(*) FROM grounded.documents WHERE deleted_at IS NOT NULL AND purge_after < now())        + (SELECT count(*) FROM grounded.document_versions AS v JOIN grounded.documents AS d             ON d.tenant_id = v.tenant_id AND d.id = v.document_id           WHERE v.status = 'retired' AND v.purge_after < now() AND d.deleted_at IS NULL);   ```4. Check the audit log: each purged item has a `document.purged` or `document_version.purged` entry from the restore window.5. Only then point the app at the restored database, and check `/ready`.A purge that is still running, or a failed purge job, leaves its item in place. Look at the job queue (`queue.procrastinate_jobs`, `status`) and the worker log. Do not point the app at the database until step 3 returns `0`.
+**The purge job exists now (ADR 0027).** The restore rule is: **after any restore from backup, run the purge again before the app serves users.** A restore brings back documents and versions whose purge date has passed, and the purge removes them again. The procedure:1. Restore into a new database, never over the live one.2. Start the worker against the restored database, with `DOCUMENT_RETENTION_DAYS` set to the value the live system uses. The purge sweep runs when the worker starts and then every 15 minutes, so wait for two sweep runs (the worker logs `purge.sweep`).3. Check that nothing due is left. This query must return `0`:   ```sql   SELECT (SELECT count(*) FROM grounded.documents WHERE deleted_at IS NOT NULL AND purge_after < now())        + (SELECT count(*) FROM grounded.document_versions AS v JOIN grounded.documents AS d             ON d.tenant_id = v.tenant_id AND d.id = v.document_id           WHERE v.status = 'retired' AND v.purge_after < now() AND d.deleted_at IS NULL);   ```4. Check the audit log: each purged item has a `document.purged` or `document_version.purged` entry from the restore window.5. Only then point the app at the restored database, and check `/ready`.A purge that is still running, or a failed purge job, leaves its item in place. Look at the job queue (`queue.procrastinate_jobs`, `status`) and the worker log. Do not point the app at the database until step 3 returns `0`.
 
 ## Deployment
 
@@ -715,4 +725,4 @@ The chunks table needs the pgvector extension, and the embedding model runs insi
 
 ## Queue cleanup (ADR 0028)
 
-A daily worker task removes **succeeded** queue jobs older than 7 days (`grounded.cleanup_finished_jobs`, run at 03:00 UTC). Failed, cancelled, aborted, queued and running jobs are kept. To see the queue's size, count the rows in `queue.procrastinate_jobs` by `status`. A growing `failed` count is for a person to look at, not a cleanup failure: failed jobs are kept on purpose (ADR 0028).
+The worker's timer removes **succeeded** queue jobs older than 7 days, once a day (`grounded.cleanup_finished_jobs`; the first run is at worker start). Failed, cancelled, aborted, queued and running jobs are kept. To see the queue's size, count the rows in `queue.procrastinate_jobs` by `status`. A growing `failed` count is for a person to look at, not a cleanup failure: failed jobs are kept on purpose (ADR 0028).
