@@ -406,9 +406,9 @@ Chunks inherit this rule once they exist (section 6).
 
 | Item | Kind | Schedule or trigger | Definer function | ADR |
 |---|---|---|---|---|
-| Stalled-version sweep | Periodic job (worker_user) | Every five minutes | `enqueue_stalled_ingest` (`retry_definer`) | 0023 (amended) |
-| Purge sweep and purge jobs | Periodic sweep (purge_definer, one job per due item), then one job per item (worker_user, one transaction per item) | Every fifteen minutes | `enqueue_purge_jobs` (`purge_definer`) | 0027 |
-| Queue cleanup | Built-in `remove_old_jobs`, daily | Periodic | none | 0028 |
+| Stalled-version sweep | The worker's timer, once at start and then every five minutes (worker_user calls the definer) | Every five minutes | `enqueue_stalled_ingest` (`retry_definer`) | 0023 (amended, PR 9) |
+| Purge sweep and purge jobs | The worker's timer runs the sweep (purge_definer defers one job per due item); each job is a Procrastinate job (worker_user, one transaction per item) | Every fifteen minutes | `enqueue_purge_jobs` (`purge_definer`) | 0027 (amended, PR 9) |
+| Queue cleanup | The worker's timer, once at start and then every 24 hours (worker_user calls the definer) | Every 24 hours | `cleanup_finished_jobs` (`queue_cleanup_definer`) | 0028 (amended, PR 9) |
 | `swap_current_version` | Called by the worker in its finish transaction | Each replacement | `swap_definer` | 0024 |
 
 | Endpoint | Role | ADR |

@@ -46,3 +46,7 @@ ADR 0015 (decision 5) asks for periodic deletion of finished jobs. Procrastinate
 - **The window is 168 hours (7 days)**, and the cleanup runs daily at 03:00 UTC (`jobs/queue_cleanup.py`).
 - **Failed, cancelled and aborted jobs are kept**, as decided above. Queued and running jobs are never removed. A job with no event at all is kept, because its age is unknown (fail safe).
 - **Periodic links.** The definer holds UPDATE on `procrastinate_periodic_defers.job_id`, which the library's delete trigger needs. The link is cleared and the row is kept.
+
+## Amendment (PR 9, 2026-10-25): the cleanup runs once a day on the worker's timer
+
+The daily 03:00 UTC Procrastinate periodic task is replaced by the worker's timer, which runs `grounded.cleanup_finished_jobs` once every 24 hours, starting at worker start. The window (168 hours), the status rule (succeeded only), and the grants are unchanged. The clock time is not kept: a timer counts from the start of the worker, not from 03:00 UTC.

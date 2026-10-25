@@ -17,6 +17,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from grounded_answers.database import create_database_engine, create_session_factory
+from grounded_answers.jobs.app import build_app
+from grounded_answers.jobs.tasks import INGEST_DOCUMENT
 from grounded_answers.models import EMBEDDING_DIMENSIONS
 
 from .database import DbHandle
@@ -171,6 +173,17 @@ def worker_url(handle: DbHandle) -> str:
     return handle.url_for("worker_user", handle.passwords["worker_user"]).replace(
         "postgresql://", "postgresql+psycopg://", 1
     )
+
+
+async def enqueue_ingest(
+    handle: DbHandle, tenant: uuid.UUID, document: uuid.UUID, version: uuid.UUID
+) -> None:
+    """Queue one ingest job as app_user, the way the upload endpoint does (ADR 0015)."""
+    app = build_app(handle.url_for("app_user", handle.passwords["app_user"]))
+    async with app.open_async():
+        await app.configure_task(name=INGEST_DOCUMENT).defer_async(
+            tenant_id=str(tenant), document_id=str(document), version_id=str(version)
+        )
 
 
 @asynccontextmanager

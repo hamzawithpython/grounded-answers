@@ -50,6 +50,8 @@ failed once in three full DB runs. Being fixed in a separate PR before Step 1b (
 
 **Done since the last update (2026-10-24):** PR #38 (worker startup login check) is merged as `a25607f`. The dev cleanup is done: the stray test database is dropped, the dev role passwords are reset, and the dev database is at migration `0009`. `/ready` returns 200 and the worker smoke test passed. Step 7 is in planning (no code).
 
+**Worker logging (branch `fix/worker-startup-logs`, PR open, not merged):** the live Step 8 run found three missing lines in the worker log: `worker.config`, `purge.sweep` and `ingest.ready`. The fix is in `jobs/logging_filter.py` (every job logger has a handler) and `jobs/worker.py` (an explicit logger name, because `python -m` makes `__name__` `__main__`). Tests: a coverage test over the worker's module chain, a real-process test that queues one ingest job and waits for the five startup lines and the ingest success line, and an in-process loop test. Planted failure (`grounded_answers.ingest` removed from the handler list) fails the real-process test; restored.
+
 **Worker startup login check (PR #38, merged, change 1):** the worker checks the `worker_user` login once at startup, after the model loads, with a 10 s timeout. A wrong password stops it with `worker not started: database login failed for worker_user` and exit code 1. A database that is unreachable also stops it (`database check failed`). The check is startup-only.
 
 **Change 2, deferred to the deployment session: bounded reconnect, then exit.** When the database drops while the worker runs, retry the connection a bounded number of times, then exit non-zero. Do not build it alone: without a supervisor, a brief database restart would stop the dev worker for good. It must ship with a restart policy (for example a Docker `restart: unless-stopped` or a systemd unit) and a test with a real database restart.
@@ -70,6 +72,7 @@ failed once in three full DB runs. Being fixed in a separate PR before Step 1b (
 ## Later improvements (not yet scheduled)
 
 - **Failed-job retention (ADR 0028, decided in PR 8).** Failed queue jobs are kept indefinitely, for diagnosis, so they can grow without bound. Add a separate, longer retention window for failed jobs (30 to 90 days, to be chosen), in its own definer or as a second argument to `cleanup_finished_jobs`, with the same exact-grant tests as PR 8. Not scheduled.
+- **Worker sweep timer (PR 9).** The sweeps moved from Procrastinate periodic tasks to an in-process timer after Step 8 found the worker crashing at startup. Integration test added. Under review on `fix/worker-sweep-timer`.
 - **Separate `valkey-test` service in the test profile.** The test Valkey shares the dev Valkey container, on
   database 15, and the test fixture flushes that database. Postgres already has a separate `postgres-test`
   service on port 5433. Mirror that for Valkey, so tests never touch the dev instance's data (ADR 0006 pattern).
