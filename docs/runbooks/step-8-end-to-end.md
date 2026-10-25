@@ -105,19 +105,20 @@ function Set-MigrationUrl {
 Set-MigrationUrl
 uv run --directory backend alembic upgrade head
 if ($LASTEXITCODE -ne 0) { throw "migration failed" }
-Remove-Item Env:MIGRATION_DATABASE_URL
 ```
 
 **Expected:** a line for each migration that runs, the last one being `Running upgrade 0014_purge -> 0015_queue_cleanup, Queue cleanup: ...`, then no `ERROR`. The exit code is 0.
 
-Confirm the head:
+Confirm the head. `alembic current` needs `MIGRATION_DATABASE_URL`, so the variable is removed only after it runs:
 
 ```powershell
 uv run --directory backend alembic current
+if ($LASTEXITCODE -ne 0) { throw "alembic current failed" }
 docker compose exec -T postgres psql -U postgres -d grounded_answers -At -c "SELECT version_num FROM grounded.alembic_version;"
+Remove-Item Env:MIGRATION_DATABASE_URL
 ```
 
-**Expected:** `0015_queue_cleanup (head)` from `alembic current`, and `0015_queue_cleanup` from psql.
+**Expected:** `0015_queue_cleanup (head)` from `alembic current`, and `0015_queue_cleanup` from psql. The last command prints nothing and removes the migration URL from this shell.
 
 **If it fails:**
 - `schema queue is missing` or `extensions` errors: a bootstrap step is missing. Run the database bootstrap for the earlier sessions (RUNBOOK "Dev database bootstrap", steps 5 and 6), then migrate again.
