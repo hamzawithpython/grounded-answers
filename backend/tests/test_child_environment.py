@@ -60,7 +60,10 @@ def test_the_child_process_sees_no_worker_or_auth_variables(monkeypatch: MonkeyP
         assert not name.startswith(FORBIDDEN_PREFIXES), f"the child can read {name}"
     assert FAKE_CREDENTIAL.encode() not in stdout
     assert FAKE_KEY.encode() not in stdout
-    assert set(seen) <= set(sandbox.CHILD_ENVIRONMENT_NAMES)
+    # CPython sets LC_CTYPE itself on Linux (PEP 538, locale coercion). It is not copied from the parent, and it holds
+    # no credential, so it is the only name allowed beyond CHILD_ENVIRONMENT_NAMES.
+    runtime_set = {"LC_CTYPE"}
+    assert set(seen) - set(sandbox.CHILD_ENVIRONMENT_NAMES) <= runtime_set
 
 
 def test_the_child_environment_keeps_only_names_that_are_set() -> None:
