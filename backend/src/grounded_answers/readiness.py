@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 # Head revision of the migrations this code expects. A test checks it against alembic/versions,
 # so adding a migration without updating this constant fails CI (ADR 0009).
-EXPECTED_SCHEMA_HEAD = "0012_document_delete"
+EXPECTED_SCHEMA_HEAD = "0013_replace_and_swap"
 
 # Names used in the public 503 body. Keep them stable: clients may match on them.
 DATABASE = "database"

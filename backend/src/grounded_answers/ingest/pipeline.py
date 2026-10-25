@@ -48,7 +48,6 @@ from grounded_answers.models import Chunk as ChunkRow
 from grounded_answers.rowcount import (
     RowcountMismatchError,
     affected_rows,
-    expect_rowcount_in,
 )
 from grounded_answers.storage.object_store import ObjectNotFound, ObjectStore
 from grounded_answers.tenant_db import WorkerContext, begin_worker_transaction
@@ -125,10 +124,15 @@ _FAIL: Final = text(
     "processing_started_at = NULL, processing_token = NULL "
     "WHERE id = :version_id AND status = 'processing' AND processing_token = :token"
 )
-_SET_CURRENT: Final = text(
-    "UPDATE grounded.documents SET current_version_id = :version_id "
-    "WHERE id = :document_id AND current_version_id IS NULL AND deleted_at IS NULL"
+# The document row is the serialization point for its versions (ADR 0024). The finish takes it first, in the same
+# order as replacement and delete: document, then versions.
+_LOCK_DOCUMENT: Final = text(
+    "SELECT id FROM grounded.documents WHERE id = :document_id AND tenant_id = :tenant_id "
+    "AND deleted_at IS NULL FOR UPDATE"
 )
+# The swap (migration 0013): makes this version current if it is newer than the current one, or retires it as
+# superseded. Returns 'current' or 'superseded'.
+_SWAP: Final = text("SELECT grounded.swap_current_version(:document_id, :version_id)")
 
 
 async def _claim(
@@ -228,6 +232,13 @@ async def _write_ready(
     vectors: list[list[float]],
 ) -> Outcome:
     async with begin_worker_transaction(session_factory, WorkerContext(job.tenant_id)) as session:
+        locked = (
+            await session.execute(
+                _LOCK_DOCUMENT, {"document_id": job.document_id, "tenant_id": job.tenant_id}
+            )
+        ).first()
+        if locked is None:
+            raise LostLease("the document is not live")
         fence = await session.execute(
             _FENCE, {"version_id": job.version_id, "token": job.attempt_token}
         )
@@ -265,13 +276,15 @@ async def _write_ready(
         )
         if affected_rows(finish) != 1:
             raise LostLease("the version was taken over before finish")
-        # The first version becomes current. A later version is set by replacement (Step 7).
-        pointer = await session.execute(
-            _SET_CURRENT, {"version_id": job.version_id, "document_id": job.document_id}
-        )
-        expect_rowcount_in(pointer, frozenset({0, 1}), "ingest.set_current")
+        # The swap decides whether this version becomes current (ADR 0024). It runs in this transaction, so the
+        # pointer and the chunks become visible together, or not at all.
+        outcome = (
+            await session.execute(
+                _SWAP, {"version_id": job.version_id, "document_id": job.document_id}
+            )
+        ).scalar_one()
         await _audit(session, job, "document.ready", {})
-    logger.info("ingest.ready chunks=%d", len(chunks))
+    logger.info("ingest.ready chunks=%d swap=%s", len(chunks), outcome)
     return Outcome.READY
 
 

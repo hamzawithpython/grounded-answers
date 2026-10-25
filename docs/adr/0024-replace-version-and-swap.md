@@ -1,6 +1,6 @@
 # ADR 0024: Replacing a document version and the swap to current
 
-**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 6.
+**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 6; amended in PR 6 (row lock chosen over an advisory lock, lock order, swap signature, worker narrowing).
 
 **Date:** 2026-10-24
 
@@ -47,3 +47,13 @@ Today the worker sets `documents.current_version_id` only when it is NULL (`inge
 ## Related
 
 - ADR 0019 (upload), ADR 0022 (the write and the fence), ADR 0025 (delete), ADR 0026 (guard).
+
+## Amendment (PR 6, 2026-10-25): the lock, the lock order, and what the build settled
+
+- **Serialization point: the document row, locked with `SELECT ... FOR UPDATE`.** Replacement, the swap, and delete all take it. An advisory lock was rejected: delete would have had to take it as well, and keys can collide. The row lock adds no privilege that the function does not already have: the locking clause needs UPDATE on some column, which swap_definer holds on `current_version_id`, and app_user holds on `title`.
+- **Lock order: document, then versions, then chunks.** The finish used to write the version first. It now locks the live document first, so a finish and a delete of the same document cannot deadlock (`test_a_delete_and_a_finish_on_the_same_document_do_not_deadlock`).
+- **worker_user's lock-only policy.** PostgreSQL's CREATE POLICY reference (the table of policy commands) says that `SELECT FOR UPDATE` is filtered by the USING of SELECT and UPDATE policies, and that no WITH CHECK applies to a lock. So `worker_documents_lock` (FOR UPDATE, USING the tenant and a live document, WITH CHECK false) lets the worker lock a live document and refuses every UPDATE of it. Tested in `tests/db/test_worker_document_lock.py`.
+- **A lock on a deleted document succeeds, observed.** The purge policy (migration 0003) admits deleted rows, and permissive policies are OR-ed. So the finish does not rely on the lock to detect a delete: its live-document check and the version's status and fencing token decide.
+- **The swap's signature is (document_id, version_id).** The function checks that the version belongs to the document and to the session tenant.
+- **The swap decides for every version.** The finish no longer sets the pointer itself. The worker's set-current policy (0009) is removed. The worker keeps UPDATE on `current_version_id` for the purge clear, since the lock needs an UPDATE privilege.
+- **The retention period is temporary** (30 days, in the function) until PR 7.

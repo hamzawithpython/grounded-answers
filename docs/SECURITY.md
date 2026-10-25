@@ -125,6 +125,7 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 | T49 | A deleted document is brought back by clearing `deleted_at` (a restore that returns its chunks to retrieval) | A BEFORE UPDATE trigger refuses it for `app_user` and `worker_user`; the delete path sets `deleted_at` once (ADR 0025, migration 0012) | Built + tested (PR 4) | `tests/db/test_document_delete.py` (`test_app_user_cannot_restore_a_deleted_document`) |
 | T50 | A worker finishing a version after its document was deleted writes chunks that retrieval then shows | The delete retires the version; the finish needs `status = 'processing'` and the fencing token, so it matches zero rows and writes nothing (ADR 0022, ADR 0025) | Built + tested (PR 4) | `tests/db/test_document_delete.py` (`test_a_worker_finishing_a_deleted_version_loses_cleanly`) |
 | T51 | The document list returns stored free text, such as a raw error, that a generic-reason rule should have replaced | Failure reasons leave the server only if they are in `FAILURE_REASONS`; anything else is null (ADR 0029) | Built + tested (PR 5) | `tests/db/test_document_list.py` (`test_stored_text_that_is_not_a_generic_reason_is_never_returned`, `test_each_generic_failure_reason_is_shown_as_it_is`) |
+| T52 | Two replacements, or a replacement and a delete, race on version numbers or on the current pointer | One serialization point per document: the document row, locked FOR UPDATE by replacement, the swap and delete, and by the finish before any version write (lock order: document, then versions) (ADR 0024) | Built + tested (PR 6) | `tests/db/test_replace_race.py` (two finishing together; newer first; retrieval atomicity; deadlock ordering), `tests/db/test_replace_version.py` (two uploads at once) |
 
 ---
 
@@ -156,7 +157,7 @@ A `SECURITY DEFINER` function runs as its owner, and so it can bypass the tenant
 |---|---|---|---|---|
 | `retention_due_tenant_ids()` | `retention_definer` | Returns tenant ids only, for due purges | Built (0003) | 0007 |
 | `enqueue_stalled_ingest(lease_seconds)` | `retry_definer` | Defers one ingest job per version whose lease has expired. Queue rows only, with a fixed task name. A duplicate is skipped per version. It is the only way worker_user enqueues | Built + tested (PR 3) | 0023 (amended) |
-| `swap_current_version(version_id)` | `swap_definer` | Moves the current pointer, retires the old version, in the session tenant only | Planned, PR 6 | 0024 |
+| `swap_current_version(document_id, version_id)` | `swap_definer` | Locks the live document and makes a newer ready version current (retiring the old one), or retires a superseded one. Refuses another document or tenant, a deleted document, and a version that is not ready. worker_user may execute it and nothing else | Built + tested (PR 6) | 0024 |
 
 ---
 
