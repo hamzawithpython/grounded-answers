@@ -120,7 +120,8 @@ Trust boundaries: browser ↔ API (HTTP, CORS allowlist); API ↔ PostgreSQL (`a
 | T44 | Model or parser error text carries document text into the database or the logs | Only the generic reason is stored; the model's exception class name is logged, never its message (ADR 0020, ADR 0022, D4) | Built + tested | `tests/db/test_ingestion.py` (`test_an_embedding_failure_is_recorded_as_embedding_without_its_message`, `test_no_document_text_reaches_the_logs_on_success`) |
 | T45 | A worker, or a bug in it, moves a version to a status the lifecycle does not allow (for example queued straight to ready, which skips the claim and the lease) | A BEFORE UPDATE trigger allows only the worker's steps (queued to processing, processing to ready or failed, retired to purging); any other change by `worker_user` is refused. Extended per role in Step 7 (ADR 0022, D8) | Built + tested | `tests/db/test_ingestion.py` (`test_the_worker_transition_guard_refuses_every_step_but_its_own`) |
 | T46 | `app_user` (an app bug) moves a version to a status it may not reach, or points a document at another version | Per-role transition guard (`app_user` may only retire), and app_user loses UPDATE on `documents.current_version_id` (ADR 0026, migration 0010) | Built + tested | `tests/db/test_transition_guard.py` (the full allowed and forbidden matrix for each role; `test_app_user_cannot_point_a_document_at_a_version`) |
-| T47 | A definer function used to change another tenant's data, or a role's own rights are widened | Definer rules in "Definer functions" above; the owner is listed in the guard with only its transitions (ADR 0023, 0024, 0026) | Planned, PRs 3, 6 | Catalog test; cross-tenant tests per function |
+| T47 | A definer function used to change another tenant's data, or a role's own rights are widened | Definer rules in "Definer functions" above; the owner is listed in the guard with only its transitions (ADR 0023, 0024, 0026) | Partly built (PR 3: `enqueue_stalled_ingest`); planned PR 6 (`swap_current_version`) | Catalog test; `tests/db/test_stalled_retry.py` (owner, search_path, worker cannot enqueue except through the function) |
+| T48 | The extraction child (which parses untrusted documents) reads the worker's secrets from its environment | The child starts with an allow-list environment (PATH, SYSTEMROOT, TEMP, TMP) and `python -I` (SECURITY.md, "Extraction child environment") | Built + tested (PR 3) | `tests/test_child_environment.py` (`test_the_child_process_sees_no_worker_or_auth_variables`, plus a regression test that the launcher passes env=) |
 
 ---
 
@@ -132,6 +133,10 @@ Four layers. A bug in one must not be enough to leak data.
 2. **Policies (RLS):** every table has `ENABLE` and `FORCE ROW LEVEL SECURITY`. `USING` and `WITH CHECK` compare each row with the session tenant. No tenant set means no rows (fail closed).
 3. **Grants:** `app_user` and `worker_user` have column-level grants. Nothing grants access to the password hash or the token tables.
 4. **Tests:** the catalog test fails when a policy, grant, role attribute or function changes without a reviewed change to the expected lists.
+
+### Extraction child environment (Step 7, PR 3)
+
+The extraction child (ADR 0020) is a separate Python process, and it parses untrusted documents. Before PR 3, it inherited the worker's whole environment. That environment holds `WORKER_DATABASE_URL`, with the worker's password, and the settings of the other processes. The child now starts with an allow-list only: `PATH`, `SYSTEMROOT`, `TEMP` and `TMP` (`grounded_answers/extract/sandbox.py`, `child_environment`). It also runs with `python -I`, which ignores the `PYTHON*` settings. Tests (`tests/test_child_environment.py`) plant fake credentials in the parent, start a real child through the production launcher, and fail if the child can read any `WORKER_`, `AUTH_`, `DATABASE`, `MIGRATION_`, `APP_`, `TEST_`, `PSQL_`, `REDIS` or `VALKEY` name, or the fake values.
 
 ### Definer functions: the RLS exceptions (Step 7)
 
@@ -147,7 +152,7 @@ A `SECURITY DEFINER` function runs as its owner, and so it can bypass the tenant
 | Function | Owner | Returns or changes | Status | ADR |
 |---|---|---|---|---|
 | `retention_due_tenant_ids()` | `retention_definer` | Returns tenant ids only, for due purges | Built (0003) | 0007 |
-| `stalled_version_ids(lease_seconds)` | `retry_definer` | Returns tenant and version ids of expired leases, nothing else | Planned, PR 3 | 0023 |
+| `enqueue_stalled_ingest(lease_seconds)` | `retry_definer` | Defers one ingest job per version whose lease has expired. Queue rows only, with a fixed task name. A duplicate is skipped per version. It is the only way worker_user enqueues | Built + tested (PR 3) | 0023 (amended) |
 | `swap_current_version(version_id)` | `swap_definer` | Moves the current pointer, retires the old version, in the session tenant only | Planned, PR 6 | 0024 |
 
 ---
@@ -218,7 +223,7 @@ Passwords are never printed. Driver error messages are not logged, because they 
 | R17 | Cross-tenant job rows. The queue has no RLS (ADR 0015). `worker_user` reads every job row. `app_user` reads every job id across tenants (the enqueue grant, ADR 0016). The ids reveal overall job volume, not content. | ADR 0015, ADR 0016 | Queue in its own schema (`queue`); grants are the reviewed list in `expected_queue_grants.json`; PUBLIC has none; `app_user` cannot read `args` (test). Argument format is checked by a test in Step 1b. | **Accepted by the owner (ADR 0016).** Argument-format test (Step 1b). |
 | R18 | Queue load on the database. Polling and job writes share the database with tenant traffic. | ADR 0015 | None yet | Measure in Session 4; move the queue to its own database if needed (new ADR) |
 | R19 | On Windows (development only) the extraction child has a timeout but no memory limit: the stdlib has no per-process memory limit there, and a Job Object is not added as a dependency. | ADR 0020 | Timeout and output cap on Windows; memory limit on Linux (production and CI) | Accepted for development. Production runs on Linux, where the 1 GiB limit applies and is tested in CI. |
-| R20 | A worker killed hard leaves a version in `processing` with no job to retry it, until its lease expires and a new job is enqueued. The periodic stalled-job retry is not built yet. | ADR 0022, D5 | The lease expires, so the version is never locked for good; a manual re-enqueue recovers it | Open. Planned: ADR 0023, PR 3. The sweep needs the security-definer function `stalled_version_ids`, under the rules in "Definer functions" above. |
+| R20 | A worker killed hard leaves a version in `processing` with no job to retry it, until its lease expires and a new job is enqueued. The periodic stalled-job retry is not built yet. | ADR 0022, D5 | The lease expires, so the version is never locked for good; a manual re-enqueue recovers it | Built in PR 3 (ADR 0023). A periodic sweep calls the security-definer function `enqueue_stalled_ingest`, which defers one ingest job per stalled version. Residual: a killed version waits for its lease to expire (20 minutes by default) before it is retried. |
 
 ---
 

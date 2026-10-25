@@ -124,7 +124,7 @@ docker compose up -d
 
 **A DB test run stops `app_user` or `migration_role` from logging in**
 - Cause: the test admin URL pointed at the dev cluster. The fixture resets the three login roles' passwords on every run.
-- Fix: rerun dev bootstrap steps 3 and 4 with the passwords you intend to keep, then `verify_login.py`. Keep `TEST_ADMIN_DATABASE_URL` on port 5433. The guard refuses the dev host and port, but only when `backend\.env` has a `DATABASE_URL`.
+- Fix: rerun dev bootstrap steps 3 and 4a with the passwords you intend to keep, then `verify_login.py`. Keep `TEST_ADMIN_DATABASE_URL` on port 5433. The guard refuses the dev host and port, but only when `backend\.env` has a `DATABASE_URL`.
 
 **`ROLE_SCRAM is not set` (or another SCRAM variable) when a reset or bootstrap runs**
 - Cause: `docker compose exec -e NAME` forwards only the variables it names. The variable is set in PowerShell, but it never reaches the container.
@@ -303,11 +303,18 @@ $env:WORKER_USER_SCRAM    = uv run --directory backend python scripts/make_scram
 $env:MIGRATION_ROLE_SCRAM = uv run --directory backend python scripts/make_scram_verifier.py migration_role
 ```
 
-**4. Cluster bootstrap** (roles and passwords). Expect `ALTER ROLE` and `GRANT` lines, no `ERROR`. Safe to re-run.
+**4a. Login roles** (roles and passwords). Needs the verifiers from step 3. Expect `ALTER ROLE` lines, no `ERROR`. Safe to re-run.
 
 ```powershell
 Get-Content -Raw backend\scripts\bootstrap_cluster.sql | docker compose exec -T -e MIGRATION_ROLE_SCRAM -e APP_USER_SCRAM -e WORKER_USER_SCRAM postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f -
-if ($LASTEXITCODE -ne 0) { throw "cluster bootstrap failed" }
+if ($LASTEXITCODE -ne 0) { throw "login role bootstrap failed" }
+```
+
+**4b. Definer roles** (no secrets; a definer role never needs the verifiers). Expect `GRANT` lines, no `ERROR`. Safe to re-run. To add a definer role later, add its name to `backend\scripts\bootstrap_definer_roles.sql` and run this same command.
+
+```powershell
+Get-Content -Raw backend\scripts\bootstrap_definer_roles.sql | docker compose exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f -
+if ($LASTEXITCODE -ne 0) { throw "definer role bootstrap failed" }
 ```
 
 **5. Database bootstrap** (CONNECT grants, schema). Expect `GRANT` and `CREATE` lines, no `ERROR`.

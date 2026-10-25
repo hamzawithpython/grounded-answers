@@ -7,9 +7,10 @@ Order, once per pytest session:
      connection with that privilege).
   3. Generate a fresh random password per login role for this session.
   4. Compute each role's SCRAM verifier with libpq (build_verifier), never by hand.
-  5. Run the SAME two SQL files the operator runs, through psql (PSQL_COMMAND):
-       bootstrap_cluster.sql   against the maintenance database
-       bootstrap_database.sql  against grounded_answers_test
+  5. Run the SAME SQL files the operator runs, through psql (PSQL_COMMAND):
+       bootstrap_cluster.sql          against the maintenance database (login roles)
+       bootstrap_definer_roles.sql    against the maintenance database (definer roles)
+       bootstrap_database.sql         against grounded_answers_test
 
 Failures raise. Nothing is skipped: a missing database or psql is an error (ADR 0006).
 """
@@ -99,6 +100,7 @@ def grounded_db() -> Iterator[DbHandle]:
         bootstrap.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(TEST_DB_NAME)))
 
     run_sql_file(psql, SCRIPTS_DIR / "bootstrap_cluster.sql", "postgres", env, redact)
+    run_sql_file(psql, SCRIPTS_DIR / "bootstrap_definer_roles.sql", "postgres", env, redact)
     run_sql_file(psql, SCRIPTS_DIR / "bootstrap_database.sql", TEST_DB_NAME, env, redact)
 
     # Schema: the migrations run as migration_role, the same role production uses (ADR 0005).

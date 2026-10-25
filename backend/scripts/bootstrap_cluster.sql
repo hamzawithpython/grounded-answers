@@ -1,4 +1,6 @@
--- Cluster bootstrap (ADR 0006 amendment, layer a). Run ONCE per cluster, as the cluster admin.
+-- Login roles bootstrap (ADR 0006 amendment, layer a). Run as the cluster admin.
+-- Creates the three LOGIN roles and sets their passwords. The definer roles (NOLOGIN, no password) are in
+-- bootstrap_definer_roles.sql, which needs no secrets, so a new definer role never needs this file.
 -- Idempotent: safe to re-run. Passwords arrive as SCRAM-SHA-256 verifiers in environment
 -- variables, computed by scripts/make_scram_verifier.py (libpq), never as plaintext.
 --
@@ -15,10 +17,7 @@ BEGIN
   FOR r IN SELECT * FROM (VALUES
       ('migration_role', true),
       ('app_user', true),
-      ('worker_user', true),
-      ('auth_definer', false),
-      ('retention_definer', false),
-      ('provisioning_definer', false)
+      ('worker_user', true)
     ) AS t(name, can_login)
   LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r.name) THEN
@@ -37,9 +36,6 @@ $$;
 ALTER ROLE migration_role NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 ALTER ROLE app_user NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 ALTER ROLE worker_user NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
-ALTER ROLE auth_definer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
-ALTER ROLE retention_definer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
-ALTER ROLE provisioning_definer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 
 -- 3. Verifiers from the environment. An unset variable leaves the psql variable undefined,
 --    so each check stops the run with a clear message (ON_ERROR_STOP).
@@ -64,11 +60,4 @@ ALTER ROLE migration_role PASSWORD :'migration_role_scram';
 ALTER ROLE app_user PASSWORD :'app_user_scram';
 ALTER ROLE worker_user PASSWORD :'worker_user_scram';
 
--- 5. The migration role may SET ROLE to the definer roles (needed for ALTER FUNCTION ... OWNER TO)
---    but does not inherit their privileges. GRANT takes one WITH option per statement.
-GRANT auth_definer TO migration_role WITH INHERIT FALSE;
-GRANT auth_definer TO migration_role WITH SET TRUE;
-GRANT retention_definer TO migration_role WITH INHERIT FALSE;
-GRANT retention_definer TO migration_role WITH SET TRUE;
-GRANT provisioning_definer TO migration_role WITH INHERIT FALSE;
-GRANT provisioning_definer TO migration_role WITH SET TRUE;
+-- The definer roles and their grants to migration_role: bootstrap_definer_roles.sql (run it next).

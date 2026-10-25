@@ -406,7 +406,7 @@ Chunks inherit this rule once they exist (section 6).
 
 | Item | Kind | Schedule or trigger | Definer function | ADR |
 |---|---|---|---|---|
-| Stalled-version sweep | Periodic job (worker_user) | Every few minutes | `stalled_version_ids` (`retry_definer`) | 0023 |
+| Stalled-version sweep | Periodic job (worker_user) | Every five minutes | `enqueue_stalled_ingest` (`retry_definer`) | 0023 (amended) |
 | Purge sweep and purge jobs | Periodic job, then one job per item | Every few minutes | none (RLS, inside the tenant) | 0027 |
 | Queue cleanup | Built-in `remove_old_jobs`, daily | Periodic | none | 0028 |
 | `swap_current_version` | Called by the worker in its finish transaction | Each replacement | `swap_definer` | 0024 |

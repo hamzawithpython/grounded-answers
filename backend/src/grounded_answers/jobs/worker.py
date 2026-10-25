@@ -27,6 +27,7 @@ from grounded_answers.embedding.model import ModelIntegrityError, load_embedder
 from grounded_answers.jobs.app import build_app
 from grounded_answers.jobs.ingest_task import register_ingest_task
 from grounded_answers.jobs.logging_filter import install_job_log_redaction
+from grounded_answers.jobs.stalled import register_stalled_sweep
 from grounded_answers.runtime import selector_loop_factory
 from grounded_answers.storage.postgres_store import PostgresObjectStore
 from grounded_answers.worker_config import WorkerSettings
@@ -79,6 +80,7 @@ async def serve(*, conninfo: str, database_url: str, model_dir: Path, lease_seco
         embedder=embedder,
         lease_seconds=lease_seconds,
     )
+    register_stalled_sweep(app, session_factory=session_factory, lease_seconds=lease_seconds)
     try:
         async with app.open_async():
             await app.run_worker_async()

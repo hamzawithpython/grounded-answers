@@ -53,3 +53,20 @@ Both work on jobs and workers, not on versions. Neither reads the lease that the
 ## Related
 
 - ADR 0015 (Procrastinate), ADR 0017 (UUID-only arguments), ADR 0022 (lease, fencing, D5 gap).
+
+## Amendment (PR 3, 2026-10-24): the defer runs inside the definer function
+
+Decision 2 is changed, for two reasons found while building PR 3.
+
+1. **The worker has no right to defer.** Migration 0005 grants enqueueing to app_user only. The original design had the worker defer the jobs, which would have needed a new grant on the queue tables. That grant is a wider privilege than the sweep needs.
+2. **A batch defer stops at the first duplicate.** Procrastinate's defer SQL (`queue.procrastinate_defer_jobs_v1`, read from the installed 3.10.0 source) inserts a batch in one statement. A queued job with the same `queueing_lock` raises `unique_violation` for the whole statement. A sweep that deferred a batch would stop at the first version that already had a waiting job.
+
+The change:
+
+- The sweep is one definer function, `grounded.enqueue_stalled_ingest(lease_seconds)`, owned by `retry_definer`. It finds the expired leases and defers each version in its own block. A `unique_violation` counts that version as already waiting, and the loop continues. The job already waiting is not changed.
+- `worker_user` has EXECUTE on that function, and no grant on the queue tables. It cannot enqueue any other way.
+- The task name, `grounded.ingest_document`, is written in the function. A caller cannot choose another task.
+- `retry_definer` gets the same grants as app_user for enqueueing (migration 0005), plus the event-row grant that the status trigger needs, and nothing more.
+- The sweep does not use the Procrastinate App. It calls the function in one transaction and commits.
+
+Verified by: a sweep where one stalled version already has a waiting job and another has none defers exactly one new job, and the existing job is the same row afterwards (`tests/db/test_stalled_retry.py::test_a_version_with_a_waiting_job_is_skipped_and_its_job_is_untouched`). With the per-version block removed, that test fails.
