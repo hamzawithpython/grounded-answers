@@ -6,6 +6,7 @@ Dependency and tooling changes are listed here too.
 ## [Unreleased]
 
 ### Documentation
+- `docs/runbooks/step-8-end-to-end.md`: fixes from the live run (PR #49). Step 1c runs `alembic current` before the migration URL is removed. Step 3a writes `.env` without a BOM. Step 7 expects two `document.swap` rows for the Expense Policy. Step 8a counts `position` (chunks have no `id`). Step 8c no longer puts the password on the docker command line. Step 8e expects `document.swap` to equal the number of versions that became current (8).
 - Step 7 decisions, ADRs 0023 to 0029: the stalled-version retry, replacement and the ordered swap, delete, the per-role transition guard, the purge job, queue cleanup and the document list. ARCHITECTURE §5 and SECURITY (definer-function rules, threats T46 and T47, R20) are updated to match. Nothing is built yet.
 - ADR 0021: embedding model (multilingual-e5-small, MIT, 384 dimensions, with `passage:` / `query:` prefixes) and
   chunking (section-aware, about 1,200 characters, tables whole). Records the hosting requirement (about 1.1 GB RAM per
