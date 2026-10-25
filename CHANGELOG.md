@@ -32,6 +32,7 @@ Dependency and tooling changes are listed here too.
   `Settings` forbids unknown keys, so the app failed at startup. Migration credentials now come from the
   shell only (ADR 0004). `tests/test_env_example.py` fails CI if the example and `Settings` disagree.
 ### Added
+- Document list (ADR 0029): `GET /documents`, tenant_admin only, newest first, cursor pagination (default 20, max 50). Each item shows the current version status and the latest version (id, number, status, generic failure reason). Bad limit or cursor is 400. A failure reason is returned only when it is a generic reason.
 - Document delete (ADR 0025): `DELETE /documents/{id}`, tenant_admin only. One transaction sets `deleted_at` and `purge_after`, retires every version, and writes a `document.delete` audit row with counts only. Retrieval drops the chunks on commit. A repeat delete and an unknown id both answer 404. Migration `0012` refuses a restore (clearing `deleted_at`) by a guarded role. Retention is a temporary 30-day constant until `DOCUMENT_RETENTION_DAYS` (PR 7).
 - Stalled-version retry (ADR 0023, amended): a periodic sweep defers one ingest job for each version whose lease expired, through the definer function `enqueue_stalled_ingest` (migration `0011`). Duplicates are skipped per version.
 - Cluster bootstrap is split. `bootstrap_cluster.sql` creates the login roles and needs the verifiers. The new `bootstrap_definer_roles.sql` creates the definer roles and needs no secrets, so adding a definer role is one command (RUNBOOK, steps 4a and 4b).

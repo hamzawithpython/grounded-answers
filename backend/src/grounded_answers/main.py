@@ -13,6 +13,7 @@ from grounded_answers.auth_keys import KeyFileError, load_key_ring
 from grounded_answers.config import Settings, get_settings
 from grounded_answers.database import create_database_engine, create_session_factory
 from grounded_answers.documents_api import router as documents_router
+from grounded_answers.documents_list import router as documents_list_router
 from grounded_answers.jobs.app import build_app, conninfo_from_sqlalchemy_url
 from grounded_answers.jobs.logging_filter import install_job_log_redaction
 from grounded_answers.passwords import make_dummy_hash
@@ -158,6 +159,7 @@ def create_app(readiness: ReadinessChecker | None = None) -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(documents_router)
+    app.include_router(documents_list_router)
     # The body cap runs in front of every parser, so a large upload is refused while it streams
     # (ADR 0019, decision D2). Only the upload path is limited.
     app.add_middleware(UploadBodyLimit, path="/documents", max_bytes=MAX_BODY_BYTES)

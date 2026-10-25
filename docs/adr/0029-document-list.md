@@ -1,6 +1,6 @@
 # ADR 0029: Listing documents for tenant admins
 
-**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 5.
+**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 5 (`GET /documents`, `documents_list.py`).
 
 **Date:** 2026-10-24
 
@@ -42,3 +42,11 @@ Step 8 needs the admin to see ingestion results: which documents are queued, pro
 ## Related
 
 - ADR 0019 (upload), ADR 0020 (failure reasons), ADR 0022 (statuses), ARCHITECTURE §5.6.
+
+## Amendment (PR 5, 2026-10-25): what the build settled
+
+- **Two statuses per item.** `current_version_status` is null until a version is current. `latest_version_*` (id, number, status, failure reason) is the highest `version_no`, so a queued first version and a failed replacement are both visible. The current and latest versions can differ, and both are shown.
+- **Cursor.** The cursor is an opaque, URL-safe encoding of the `(created_at, id)` of the last item. Pages are "strictly after this key", newest first. A document added between two requests sorts above the cursor, so it is never repeated and never displaces an item on a later page (`test_a_document_added_between_pages_repeats_and_skips_nothing`). The cursor is a position, not an authorization: RLS still decides what the caller sees.
+- **Bad limit or cursor is 400, not 422.** FastAPI's default 422 has a list-shaped body. This API answers 400 with `{"detail": "..."}`, the same shape as its other errors. The messages are generic and do not echo the input.
+- **`failure_reason` only leaves the server as a generic reason.** The column is free text. Only values in `FAILURE_REASONS` (ADR 0020, ADR 0022 D4 and D5) are returned; anything else is null, and is not echoed. A planted non-generic value is tested.
+- **The walk is bounded in the tests.** A cursor that stops moving forward fails the test after 100 pages instead of hanging the suite. This was found when a planted cursor bug made the walk loop.
