@@ -18,6 +18,7 @@ Responses carry a stable shape: {"detail": "..."} (plus document_id on 409). No 
 import hashlib
 import json
 import uuid
+from dataclasses import dataclass
 from typing import Any, Final
 
 from fastapi import APIRouter, Request
@@ -35,7 +36,7 @@ from grounded_answers.jobs.tasks import INGEST_DOCUMENT
 from grounded_answers.rate_limit import LimiterUnavailable
 from grounded_answers.rowcount import affected_rows, expect_rowcount
 from grounded_answers.storage.object_store import ObjectStore
-from grounded_answers.upload.detect import CONTENT_TYPE, UnsupportedFileType, detect_kind
+from grounded_answers.upload.detect import CONTENT_TYPE, Kind, UnsupportedFileType, detect_kind
 from grounded_answers.upload.limits import (
     MAX_FILE_BYTES,
     MAX_FORM_FIELDS,
@@ -67,7 +68,7 @@ _INSERT_DOCUMENT: Final = text(
 _INSERT_VERSION: Final = text(
     "INSERT INTO grounded.document_versions (id, tenant_id, document_id, version_no, "
     "original_filename, content_type, size_bytes, sha256, storage_key, status, created_by) "
-    "VALUES (:id, :tenant_id, :document_id, 1, :original_filename, :content_type, :size_bytes, "
+    "VALUES (:id, :tenant_id, :document_id, :version_no, :original_filename, :content_type, :size_bytes, "
     ":sha256, :storage_key, 'queued', :created_by)"
 )
 _INSERT_AUDIT: Final = text(
@@ -81,17 +82,23 @@ def _error(status: int, detail: str, **extra: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"detail": detail, **extra})
 
 
-@router.post("", response_model=None, status_code=201)
-async def upload_document(request: Request, ctx: AuthenticatedRequest) -> Response:
-    if not get_settings().upload_enabled:
-        return _error(404, "Not Found")
-    principal = ctx.principal
-    if principal.role != "tenant_admin":
-        return _error(403, "Forbidden")
+@dataclass(frozen=True)
+class _Upload:
+    """A checked file: its bytes, the sanitised name, the detected kind, and the sha256 of the bytes."""
 
+    data: bytes
+    name: str
+    kind: Kind
+    digest: bytes
+
+
+async def _admit_upload(
+    request: Request, tenant_id: uuid.UUID, user_id: uuid.UUID
+) -> JSONResponse | None:
+    """The upload rate limit (ADR 0019). None when the request may go on."""
     limiter: UploadLimiter = request.app.state.upload_limiter
     try:
-        retry_after = await limiter.admit(principal.tenant_id, principal.user_id)
+        retry_after = await limiter.admit(tenant_id, user_id)
     except LimiterUnavailable:
         return _error(503, "Service unavailable")
     if retry_after is not None:
@@ -100,7 +107,11 @@ async def upload_document(request: Request, ctx: AuthenticatedRequest) -> Respon
             content={"detail": "Too many uploads. Try again later."},
             headers={"Retry-After": str(retry_after)},
         )
+    return None
 
+
+async def _read_upload(request: Request) -> _Upload | JSONResponse:
+    """The form's file, with every limit of POST /documents (ADR 0019). Shared with replacement (ADR 0024)."""
     try:
         form = await request.form(
             max_files=MAX_FORM_FILES,
@@ -126,8 +137,24 @@ async def upload_document(request: Request, ctx: AuthenticatedRequest) -> Respon
         kind = detect_kind(data, name)
     except UnsupportedFileType:
         return _error(415, "This file type is not supported")
+    return _Upload(data=data, name=name, kind=kind, digest=hashlib.sha256(data).digest())
 
-    digest = hashlib.sha256(data).digest()
+
+@router.post("", response_model=None, status_code=201)
+async def upload_document(request: Request, ctx: AuthenticatedRequest) -> Response:
+    if not get_settings().upload_enabled:
+        return _error(404, "Not Found")
+    principal = ctx.principal
+    if principal.role != "tenant_admin":
+        return _error(403, "Forbidden")
+
+    refused = await _admit_upload(request, principal.tenant_id, principal.user_id)
+    if refused is not None:
+        return refused
+    file = await _read_upload(request)
+    if isinstance(file, JSONResponse):
+        return file
+    data, name, kind, digest = file.data, file.name, file.kind, file.digest
     session = ctx.session
     tenant_id = principal.tenant_id
 
@@ -157,6 +184,7 @@ async def upload_document(request: Request, ctx: AuthenticatedRequest) -> Respon
             "sha256": digest,
             "storage_key": storage_key,
             "created_by": str(principal.user_id),
+            "version_no": 1,
         },
     )
     store: ObjectStore = request.app.state.object_store
@@ -278,3 +306,121 @@ async def delete_document(document_id: uuid.UUID, ctx: AuthenticatedRequest) -> 
     if versions is None:
         return _error(404, "Not Found")
     return Response(status_code=204)
+
+
+# ---- POST /documents/{id}/versions (ADR 0024) ----
+
+# The document row is the one serialization point for its versions (ADR 0024). A replacement takes it, and so do the
+# swap at ingestion finish and a delete. Two replacements therefore cannot read the same maximum version number.
+_LOCK_LIVE_DOCUMENT: Final = text(
+    "SELECT current_version_id FROM grounded.documents WHERE id = :document_id AND tenant_id = :tenant_id "
+    "AND deleted_at IS NULL FOR UPDATE"
+)
+_CURRENT_VERSION: Final = text(
+    "SELECT id, sha256 FROM grounded.document_versions WHERE id = :version_id AND tenant_id = :tenant_id"
+)
+_NEXT_VERSION_NUMBER: Final = text(
+    "SELECT COALESCE(MAX(version_no), 0) + 1 FROM grounded.document_versions "
+    "WHERE document_id = :document_id AND tenant_id = :tenant_id"
+)
+_INSERT_REPLACEMENT_AUDIT: Final = text(
+    "INSERT INTO grounded.audit_log (id, tenant_id, actor_user_id, action, target_type, target_id, "
+    "detail) VALUES (:id, :tenant_id, :actor_user_id, 'document_version.upload', 'document_version', "
+    ":target_id, CAST(:detail AS jsonb))"
+)
+
+
+@router.post("/{document_id}/versions", response_model=None, status_code=201)
+async def replace_document(
+    document_id: uuid.UUID, request: Request, ctx: AuthenticatedRequest
+) -> Response:
+    """
+    Upload a new version of a live document (ADR 0024). It is queued, with version_no = the highest + 1, and its
+    ingestion job is enqueued in the same transaction. The swap at finish decides whether it becomes current.
+
+    404 for a missing, deleted or another tenant's document (the same answer, as for DELETE). 409 with the current
+    version's ids when the bytes equal the current version's.
+    """
+    if not get_settings().upload_enabled:
+        return _error(404, "Not Found")
+    principal = ctx.principal
+    if principal.role != "tenant_admin":
+        return _error(403, "Forbidden")
+    refused = await _admit_upload(request, principal.tenant_id, principal.user_id)
+    if refused is not None:
+        return refused
+    file = await _read_upload(request)
+    if isinstance(file, JSONResponse):
+        return file
+
+    session = ctx.session
+    tenant_id = principal.tenant_id
+    locked = (
+        await session.execute(
+            _LOCK_LIVE_DOCUMENT, {"document_id": str(document_id), "tenant_id": str(tenant_id)}
+        )
+    ).first()
+    if locked is None:
+        return _error(404, "Not Found")
+    if locked[0] is not None:
+        current = (
+            await session.execute(
+                _CURRENT_VERSION, {"version_id": str(locked[0]), "tenant_id": str(tenant_id)}
+            )
+        ).first()
+        if current is not None and bytes(current[1]) == file.digest:
+            return _error(
+                409,
+                "This file is already the current version",
+                document_id=str(document_id),
+                version_id=str(current[0]),
+            )
+    version_no = (
+        await session.execute(
+            _NEXT_VERSION_NUMBER, {"document_id": str(document_id), "tenant_id": str(tenant_id)}
+        )
+    ).scalar_one()
+
+    version_id = uuid.uuid4()
+    await session.execute(
+        _INSERT_VERSION,
+        {
+            "id": str(version_id),
+            "tenant_id": str(tenant_id),
+            "document_id": str(document_id),
+            "version_no": version_no,
+            "original_filename": file.name[:_ORIGINAL_FILENAME_CHARS],
+            "content_type": CONTENT_TYPE[file.kind],
+            "size_bytes": len(file.data),
+            "sha256": file.digest,
+            "storage_key": f"tenant/{tenant_id}/{uuid.uuid4()}",
+            "created_by": str(principal.user_id),
+        },
+    )
+    store: ObjectStore = request.app.state.object_store
+    await store.put(session, tenant_id=tenant_id, version_id=version_id, data=file.data)
+    await session.execute(
+        _INSERT_REPLACEMENT_AUDIT,
+        {
+            "id": str(uuid.uuid4()),
+            "tenant_id": str(tenant_id),
+            "actor_user_id": str(principal.user_id),
+            "target_id": str(version_id),
+            "detail": json.dumps({"size_bytes": len(file.data), "version_no": version_no}),
+        },
+    )
+    await enqueue_job(
+        session,
+        request.app.state.job_app,
+        INGEST_DOCUMENT,
+        {"tenant_id": tenant_id, "document_id": document_id, "version_id": version_id},
+    )
+    return JSONResponse(
+        status_code=201,
+        content={
+            "document_id": str(document_id),
+            "version_id": str(version_id),
+            "version_no": version_no,
+            "status": "queued",
+        },
+    )
