@@ -400,14 +400,14 @@ Chunks inherit this rule once they exist (section 6).
 
 ### 5.8 Settings
 
-- `DOCUMENT_RETENTION_DAYS`: integer, default `30`, range `1–365`. Validated in `Settings` at startup. Not in code yet: it is built in Step 7, PR 7 (ADR 0027). This section described it as added in Session 2, Step 4; that was wrong, and the check found no match in `backend/`.
+- `DOCUMENT_RETENTION_DAYS`: integer, default `30`, range `1–365`. Validated in `Settings` (web app) and `WorkerSettings` (worker) at startup. Built in Step 7, PR 7 (ADR 0027). Each retirement records its own `purge_after` from it, so a later change affects only later retirements.
 
 ### 5.10 Step 7 jobs and endpoints (ADR 0023 to 0029)
 
 | Item | Kind | Schedule or trigger | Definer function | ADR |
 |---|---|---|---|---|
 | Stalled-version sweep | Periodic job (worker_user) | Every five minutes | `enqueue_stalled_ingest` (`retry_definer`) | 0023 (amended) |
-| Purge sweep and purge jobs | Periodic job, then one job per item | Every few minutes | none (RLS, inside the tenant) | 0027 |
+| Purge sweep and purge jobs | Periodic sweep (purge_definer, one job per due item), then one job per item (worker_user, one transaction per item) | Every fifteen minutes | `enqueue_purge_jobs` (`purge_definer`) | 0027 |
 | Queue cleanup | Built-in `remove_old_jobs`, daily | Periodic | none | 0028 |
 | `swap_current_version` | Called by the worker in its finish transaction | Each replacement | `swap_definer` | 0024 |
 

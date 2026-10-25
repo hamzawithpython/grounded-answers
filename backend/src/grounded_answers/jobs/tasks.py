@@ -9,3 +9,4 @@ then, a job for that name waits in the queue and is not run.
 from typing import Final
 
 INGEST_DOCUMENT: Final = "grounded.ingest_document"
+PURGE_ITEM: Final = "grounded.purge_item"

@@ -303,6 +303,7 @@ async def test_a_killed_attempt_is_completed_by_the_deferred_job_exactly_once(
             version_id=uuid.UUID(args["version_id"]),
             attempt_token=attempt_token(job_id),
             lease_seconds=120,
+            retention_days=30,
         )
         first = await run_ingestion(
             session_factory=factory,

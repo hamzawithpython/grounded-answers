@@ -548,6 +548,10 @@ The refresh cookie is `__Secure-refresh`. Browsers keep it only when it carries 
 
 ## Background worker (ADR 0017, Session 4 Step 1b-i)
 
+The worker reads `DOCUMENT_RETENTION_DAYS` (1 to 365, default 30) from the shell environment, as the web app does. The swap stamps each retirement with it, and the purge removes items when their period has passed (ADR 0027). Set it to the same value in both places.
+
+**The web app and the worker must have the same `DOCUMENT_RETENTION_DAYS`.** A different value gives different retention periods to rows retired by the web app (delete) and by the worker (replacement swap). The worker logs its value at startup as `worker.config document_retention_days=N`: check that line against the web app's setting after every change. The swap also refuses any value outside 1 to 365 in SQL, so a bad value cannot reach a row.
+
 The worker runs background jobs as `worker_user`. Its database URL is set in the shell only, never in a file.
 
 **Start (from `backend\`, in PowerShell):**
@@ -653,14 +657,7 @@ The four required checks are the merge gate. Required approvals are `0` because 
 
 A backup holds deleted content until the provider's backup window expires (SECURITY.md, ADR 0007). A restore therefore brings back documents whose purge date has passed. Until the purge job exists, **do not restore user data from a backup**.
 
-Once the purge job exists, the restore procedure is:
-
-1. Restore into a new database, never over the live one.
-2. Run the purge job in catch-up mode, for every document with `purge_after < now()`.
-3. Check the audit log: each of those documents has a `document.purged` or `document_version.purged` entry.
-4. Only then point the app at the restored database, and check `/ready`.
-
-This section is a plan. Steps 2 and 3 are not testable until the purge job is written, and this section will be updated then.
+**The purge job exists now (ADR 0027).** The restore rule is: **after any restore from backup, run the purge again before the app serves users.** A restore brings back documents and versions whose purge date has passed, and the purge removes them again. The procedure:1. Restore into a new database, never over the live one.2. Start the worker against the restored database, with `DOCUMENT_RETENTION_DAYS` set to the value the live system uses. The purge sweep runs every 15 minutes, so wait for two sweep marks (the worker logs `purge.sweep`).3. Check that nothing due is left. This query must return `0`:   ```sql   SELECT (SELECT count(*) FROM grounded.documents WHERE deleted_at IS NOT NULL AND purge_after < now())        + (SELECT count(*) FROM grounded.document_versions AS v JOIN grounded.documents AS d             ON d.tenant_id = v.tenant_id AND d.id = v.document_id           WHERE v.status = 'retired' AND v.purge_after < now() AND d.deleted_at IS NULL);   ```4. Check the audit log: each purged item has a `document.purged` or `document_version.purged` entry from the restore window.5. Only then point the app at the restored database, and check `/ready`.A purge that is still running, or a failed purge job, leaves its item in place. Look at the job queue (`queue.procrastinate_jobs`, `status`) and the worker log. Do not point the app at the database until step 3 returns `0`.
 
 ## Deployment
 

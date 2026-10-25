@@ -63,6 +63,7 @@ def _job(tenant: uuid.UUID, document: uuid.UUID, version: uuid.UUID, lease: int 
         version_id=version,
         attempt_token=uuid.uuid4(),
         lease_seconds=lease,
+        retention_days=30,
     )
 
 
@@ -159,6 +160,7 @@ async def test_a_claim_is_resumed_by_the_same_job_and_refused_to_another(
             version_id=first.version_id,
             attempt_token=first.attempt_token,
             lease_seconds=120,
+            retention_days=30,
         )
         assert (
             await run_ingestion(
@@ -515,6 +517,7 @@ async def test_the_registered_task_gives_up_only_on_its_last_attempt(
             object_store=PostgresObjectStore(),
             embedder=FakeEmbedder(),
             lease_seconds=120,
+            retention_days=30,
         )
         task = app.tasks[INGEST_DOCUMENT]
         func = cast(Any, task.func)
@@ -528,6 +531,7 @@ async def test_the_registered_task_gives_up_only_on_its_last_attempt(
                 version_id=version,
                 attempt_token=ingest_task.attempt_token(job_id),
                 lease_seconds=120,
+                retention_days=30,
             ),
         )
         monkeypatch.setattr(ingest_task, "run_ingestion", lost_connection)

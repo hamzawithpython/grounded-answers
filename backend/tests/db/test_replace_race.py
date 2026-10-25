@@ -120,6 +120,7 @@ def _job(seeded: Seeded, document: uuid.UUID, version: uuid.UUID) -> IngestJob:
         version_id=version,
         attempt_token=uuid.uuid4(),
         lease_seconds=120,
+        retention_days=30,
     )
 
 

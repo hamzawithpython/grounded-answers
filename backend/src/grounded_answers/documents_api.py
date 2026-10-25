@@ -51,9 +51,6 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 _TITLE_CHARS: Final = 200
 _ORIGINAL_FILENAME_CHARS: Final = 255
 
-# TEMPORARY (ADR 0027, PR 4): the retention period for a deleted document, until PR 7 adds
-# DOCUMENT_RETENTION_DAYS to Settings (1 to 365, default 30). Replace this constant with that setting.
-TEMPORARY_RETENTION_DAYS: Final = 30
 
 _FIND_DUPLICATE: Final = text(
     "SELECT d.id FROM grounded.documents AS d "
@@ -242,6 +239,7 @@ async def retire_document(
     tenant_id: uuid.UUID,
     document_id: uuid.UUID,
     actor_user_id: uuid.UUID,
+    retention_days: int,
 ) -> int | None:
     """
     Delete one live document inside the caller's tenant transaction (ADR 0025). Returns the number of versions
@@ -252,7 +250,7 @@ async def retire_document(
     marked = await session.execute(
         _MARK_DOCUMENT_DELETED,
         {
-            "days": TEMPORARY_RETENTION_DAYS,
+            "days": retention_days,
             "document_id": str(document_id),
             "tenant_id": str(tenant_id),
         },
@@ -263,7 +261,7 @@ async def retire_document(
     retired = await session.execute(
         _RETIRE_VERSIONS,
         {
-            "days": TEMPORARY_RETENTION_DAYS,
+            "days": retention_days,
             "document_id": str(document_id),
             "tenant_id": str(tenant_id),
         },
@@ -302,6 +300,7 @@ async def delete_document(document_id: uuid.UUID, ctx: AuthenticatedRequest) -> 
         tenant_id=principal.tenant_id,
         document_id=document_id,
         actor_user_id=principal.user_id,
+        retention_days=get_settings().document_retention_days,
     )
     if versions is None:
         return _error(404, "Not Found")
