@@ -5,7 +5,12 @@ Dependency and tooling changes are listed here too.
 
 ## [Unreleased]
 
+### Added
+- Retrieval evaluation harness (Session 5, Step 1): `grounded_answers.evaluation` holds the question parsing, the hit rule, and the vector, keyword and hybrid rankers, which run as `app_user`. The report has recall@5, MRR, latency, per-type and score-distribution tables. The full run (`pytest -m eval -s`, real model, test database) is outside CI. A smoke test with a fake embedder runs in `-m db`. New pytest marker `eval`, deselected unless `-m` names it. `docs/EVAL.md` has the first results.
+- Test helpers: `make_version` can add a later version to an existing document, and `FakeEmbedder` has `query_embedding`.
+
 ### Documentation
+- PROGRESS: removed the stale "Dev actions before PR 3" paragraph. ARCHITECTURE section 6 now describes the chunks table (migration 0008). RUNBOOK: how to run the retrieval evaluation. EVAL: first database results.
 - `docs/runbooks/step-8-end-to-end.md`: fixes from the live run (PR #49). Step 1c runs `alembic current` before the migration URL is removed. Step 3a writes `.env` without a BOM. Step 7 expects two `document.swap` rows for the Expense Policy. Step 8a counts `position` (chunks have no `id`). Step 8c no longer puts the password on the docker command line. Step 8e expects `document.swap` to equal the number of versions that became current (8).
 - Step 7 decisions, ADRs 0023 to 0029: the stalled-version retry, replacement and the ordered swap, delete, the per-role transition guard, the purge job, queue cleanup and the document list. ARCHITECTURE §5 and SECURITY (definer-function rules, threats T46 and T47, R20) are updated to match. Nothing is built yet.
 - ADR 0021: embedding model (multilingual-e5-small, MIT, 384 dimensions, with `passage:` / `query:` prefixes) and

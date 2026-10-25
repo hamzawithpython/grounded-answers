@@ -38,10 +38,14 @@ class FakeEmbedder:
 
     def embed_passages(self, texts: Sequence[str]) -> list[list[float]]:
         self.calls.append(list(texts))
-        return [
-            [float((len(text) + i) % 7) / 7.0 for i in range(EMBEDDING_DIMENSIONS)]
-            for text in texts
-        ]
+        return [self._vector(text) for text in texts]
+
+    def query_embedding(self, text: str) -> list[float]:
+        return self._vector(text)
+
+    @staticmethod
+    def _vector(text: str) -> list[float]:
+        return [float((len(text) + i) % 7) / 7.0 for i in range(EMBEDDING_DIMENSIONS)]
 
 
 class ExplodingEmbedder:
@@ -89,14 +93,18 @@ def make_version(
     status: str = "queued",
     title: str = "Expense Policy",
     version_no: int = 1,
+    document: uuid.UUID | None = None,
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """A document with one version in the given status, and its bytes when data is given. Returns (document, version)."""
-    document = uuid.uuid4()
-    admin.execute(
-        "INSERT INTO grounded.documents (id, tenant_id, title) VALUES (%s, %s, %s)",
-        (document, tenant, title),
-    )
-    made.documents.append(document)
+    """A document with one version in the given status, and its bytes when data is given. Returns (document, version).
+
+    Pass an existing document to add a later version to it (a replacement)."""
+    if document is None:
+        document = uuid.uuid4()
+        admin.execute(
+            "INSERT INTO grounded.documents (id, tenant_id, title) VALUES (%s, %s, %s)",
+            (document, tenant, title),
+        )
+        made.documents.append(document)
     version = uuid.uuid4()
     retired = status in ("retired", "purging")
     now = datetime.now(UTC)

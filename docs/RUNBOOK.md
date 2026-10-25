@@ -726,3 +726,19 @@ The chunks table needs the pgvector extension, and the embedding model runs insi
 ## Queue cleanup (ADR 0028)
 
 The worker's timer removes **succeeded** queue jobs older than 7 days, once a day (`grounded.cleanup_finished_jobs`; the first run is at worker start). Failed, cancelled, aborted, queued and running jobs are kept. To see the queue's size, count the rows in `queue.procrastinate_jobs` by `status`. A growing `failed` count is for a person to look at, not a cleanup failure: failed jobs are kept on purpose (ADR 0028).
+
+## Retrieval evaluation (Session 5, Step 1)
+
+Loads the eight demo documents through the real pipeline into the **test** database (a fresh tenant), asks the 50 questions as `app_user`, and prints recall@5, MRR, latency and score tables for the vector, keyword and hybrid rankers. It takes about two minutes, because it embeds about 180 chunks with the real model. It is not part of CI: the marker `eval` is deselected unless `-m eval` is given.
+
+Set the same variables as "Running Database Tests", plus the model directory (Embedding model files, step 1), then:
+
+```powershell
+$env:TEST_EMBEDDING_MODEL_DIR = "$env:LOCALAPPDATA\grounded-answers\models\614241f622f53c4eeff9890bdc4f31cfecc418b3"
+$env:EVAL_REPORT_PATH = "$env:TEMP\retrieval-eval.json"   # optional: per-question detail, numbers and ids only
+uv run pytest -m eval -s
+```
+
+Expect `1 passed, ... deselected` and the tables on screen. The run rebuilds `grounded_answers_test` first, so do not run it at the same time as `pytest -m db`. Two runs on the same files give the same numbers (latency aside). A missing `TEST_EMBEDDING_MODEL_DIR` is a failure, not a skip.
+
+The plumbing (rankers as `app_user`, replaced versions invisible, the leak check, k rows) is covered in CI by `tests/db/test_retrieval_eval_smoke.py`, which uses a fake embedder.

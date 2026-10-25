@@ -70,9 +70,11 @@ quote-style = "double"
 [tool.pytest.ini_options]
 # db: needs the PostgreSQL test database and psql (ADR 0006). Run with: pytest -m db
 # Unit tests run with: pytest -m "not db"
+# eval: the full retrieval evaluation (real model, test database). Deselected unless -m eval is given.
 addopts = "--strict-markers"
 markers = [
     "db: needs PostgreSQL and psql through PSQL_COMMAND (ADR 0006); fails, never skips, when unavailable",
+    "eval: the retrieval evaluation with the real model; runs only when -m names it (pytest -m eval), never in CI",
 ]
 
 [tool.mypy]

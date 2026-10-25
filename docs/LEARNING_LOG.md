@@ -687,3 +687,25 @@ A: Check what the driver actually returns, with a probe, before you write the ru
 
 **Q: Why does the worker exit instead of retrying a wrong password?**
 A: A wrong password does not get better with time. Retrying it forever is the loop we saw in the smoke test. A bounded reconnect is a different case (a database that restarts), and it needs a supervisor to restart the worker if it gives up. We deferred it to the deployment session.
+## Session 5, Step 1 (retrieval evaluation harness): plain words
+
+### Equal scores need a tie-break that does not depend on random ids
+Keyword search ranks with `ts_rank_cd`, which gives coarse values (2.7, 1.7, 1.6). Many chunks share a score. We broke ties by `version_id`, a random UUID created at each upload. Two loads of the same files ranked differently, and recall moved by a pair or two (hybrid 0.889, then 0.867). A harness is only trustworthy if the same input gives the same output, so we compared two runs and saw they differed. The fix is a tie-break from the text itself (the md5 of the chunk body). After that, two runs matched.
+
+**Q: Why does a tie-break matter for a search system?**
+A: Without a rule, the order among equal scores is whatever the database returns, and that can change between runs. A recall number that changes with the order is not a measurement. It also makes bugs hard to reproduce.
+
+**Q: How did you find it?**
+A: I ran the full evaluation twice and diffed the JSON reports. Vector was identical, keyword and hybrid were not, and every difference was in tied scores.
+
+### Run the harness as the role that production uses
+The rankers run as `app_user` inside a tenant transaction, so row-level security and the current-version rule apply. The harness does not filter by tenant or version itself, so a retired document is invisible because the database says so. To prove the harness would notice a leak, one test runs the same questions as the admin role, which bypasses row-level security, and the retired-chunk counter must go above zero. A control that cannot fail proves nothing.
+
+**Q: Why not filter by version in the query?**
+A: Then the query would be testing itself. Using the production role tests the policy, which is the control we rely on.
+
+### A surprisingly good number needs a second look
+Hybrid retrieval scored 0.889 where our earlier notes said 0.76. A jump like that is a reason to check, not to celebrate. The check found the tie-break problem, and the final figure (0.867) still differs from the old one. We could not explain that difference because the old script is gone, so the report says so and treats it as a hypothesis for the next step.
+
+**Q: What do you do with a metric that is much better than before?**
+A: Recompute it from the raw per-question data, run it twice, and look for what changed in the method before believing it.

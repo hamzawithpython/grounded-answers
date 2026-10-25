@@ -429,15 +429,17 @@ The worker reads a version's bytes (`ObjectStore`, ADR 0018) and extracts text i
 - Output is one structure for every format: `Extracted` with `Section`s (number, heading, level, page, text) and `Table`s. Section numbers set the level; font size sets it for unnumbered PDF headings.
 - Failures are one of four reasons: `timeout`, `memory`, `unreadable`, `no_text`. Nothing from the child's stderr or stdout reaches a log or a reason.
 
-## 6. Chunks and embeddings (deferred)
+## 6. Chunks and embeddings (ADR 0021, migration 0008)
 
-**Not created in Session 2.** The embedding vector dimension depends on the embedding model decision, which is made in Session 3 or 4 (SPEC open decision #4). Creating the table earlier would hard-code a dimension we may change.
+One row per chunk of a document version, key `(tenant_id, version_id, position)`. Columns: `section_number`, `heading`, `clause_labels` (for citations such as 3.2.2), `body`, `embedding vector(384)`, `embedding_model` and `embedding_model_version` (pinned, ADR 0021 decision 6), and `tsv`, a generated `tsvector` over `body` with the English configuration. Indexes: HNSW on the embedding (cosine) and GIN on `tsv`.
 
-When it's created, the table will follow the same rules:
-- `tenant_id NOT NULL`, indexed, `UNIQUE (tenant_id, id)`.
-- `document_version_id`, with composite FK `(tenant_id, document_version_id)` → `document_versions(tenant_id, id)`, `ON DELETE RESTRICT`. Chunks are purged before their version (section 5.5, step 2).
-- The `embedding` column type fixed by the chosen model. Keyword search uses a `tsvector` column.
-- Retrieval uses the rule in section 5.6, plus the chunk's own status.
+Composite FK `(tenant_id, version_id)` to `document_versions`, `ON DELETE RESTRICT`. Chunks are purged before their version (section 5.5).
+
+**Row-level security is the retrieval rule (5.6).** `app_user` can SELECT a chunk only when its version is `ready`, is the document's `current_version_id`, and the document is not deleted. So a retrieval query needs no tenant or version filter of its own, and a retired, processing, failed or deleted version is invisible to it. `worker_user` reads, deletes and inserts chunks only for `processing` (and, for read and delete, `purging`) versions.
+
+**Retrieval candidates (Session 5, Step 1; decision in Step 2).** `grounded_answers.evaluation` runs three rankers as `app_user` and scores them on the owner's questions (`docs/EVAL.md`, "Retrieval evaluation against the database"): vector (cosine, pgvector), keyword (`tsvector` with the question's stemmed words joined by OR, `ts_rank_cd`) and hybrid (reciprocal rank fusion, k = 60). The strategy is not chosen yet.
+
+**Tie-break.** Equal scores are common for keyword search and for fusion. The rankers break ties by the md5 of the chunk body, then `(version_id, position)`. `version_id` is a random UUID, so on its own it makes two loads of the same files rank differently.
 
 ## 7. Row-Level Security summary
 

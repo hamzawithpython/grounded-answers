@@ -1,6 +1,30 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-24 (Session 4: PR #38 merged, dev database at migration 0009, Step 7 planning, no code yet)
+**Last updated:** 2026-10-26 (Session 4 complete; Session 5 Step 1, retrieval eval harness, in progress on `feat/retrieval-eval-harness`)
+
+## Session 5 status (search and answers with citations)
+
+Plan approved 2026-10-26. Each step has its own branch and PR, and stops for review.
+
+| Step | Work | State |
+|---|---|---|
+| 1 | Retrieval evaluation harness against the test DB (`grounded_answers.evaluation`, `pytest -m eval -s`; smoke test in `-m db`) | Built on `feat/retrieval-eval-harness`, awaiting review. Results in `docs/EVAL.md` |
+| 2 | Decision: retrieval strategy (ADR 0030), then `retrieve()` | Next |
+| 3 | Decision: answer model and provider (ADR 0031) | Planned |
+| 4 | Answer contract, citation validation, refusal | Planned |
+| 5 | `POST /ask` | Planned |
+| 6 | Prompt-injection tests | Planned |
+| 7 | Answer evaluation | Planned |
+
+**Step 1 results (k = 5, 45 pairs):** vector R@5 0.800 / MRR 0.636; keyword 0.733 / 0.633; hybrid (RRF) 0.867 / 0.742. The SPEC target is 0.85, and the ceiling is 0.978 (q045's v1.0 pair is always a miss). The hybrid lead is one or two pairs and differs from the scratch figure (0.76), cause unknown, so it is a hypothesis for Step 2.
+
+**Carry into Step 2:** (1) keyword order among ties is arbitrary unless fixed; the rankers use an md5 of the body as tie-break. (2) Evaluate pgvector `hnsw.iterative_scan` with a larger multi-tenant dataset: HNSW filters after the index scan, so RLS can return fewer than k rows at scale. (3) The vector top-1 scores of answerable and unanswerable questions overlap between 0.82 and 0.84 (Step 4's refusal rule). (4) The web process has no query-embedding path yet (the model, about 1.1 GB, must load there). (5) 180 vs 190 chunks against the scratch set is unexplained.
+
+**Step 2 instructions (approved 2026-10-26):**
+- The ADR 0030 evidence must include the tie-break note (keyword order among ties was arbitrary until the md5 tie-break) and the hybrid caveat: 45 pairs, one pair = 0.022, and the old scratch figure of 0.76 is unexplained.
+- Extend the harness report with recall and MRR at k = 3, 5, 8 and 10 for each ranker, to decide how many chunks go to the answer model. State which of the 6 hybrid misses (q004 4.4, q012 6.2, q022 3.4.1, q045 6.1, q048 11.2, q049 5.4.1) still appear at k = 8 and k = 10. q045 6.1 is always a miss.
+
+**Step 4 instruction:** answerable and unanswerable vector scores overlap (0.82 to 0.84), so refusal cannot rest on a score threshold alone. It needs model judgement plus citation validation.
 
 ## Session 3 complete (2026-10-22)
 
@@ -34,7 +58,6 @@ Steps are split as you decided. Each step has its own branch and PR, and stops f
 | 6 | Ingestion worker (ADR 0022): lease and fencing token, one-transaction write, retries, `embedding` failure reason (amends ADR 0020), pinned model files with hash checks, migration `0009_ingestion_lease`, CI model cache | ✅ Merged (PR #34). Upload was off until Step 8. |
 | 7 | Replace, delete, purge and the retry that closes R20 (ADR 0023 to 0029). Decisions approved 2026-10-24. Build order: PR 1 docs (ADRs, merged as #39); PR 2 per-role transition guard and app_user grant revoke (migration 0010, merged as #40); PR 3 stalled-version retry (migration 0011, definer `enqueue_stalled_ingest`; ADR 0023 amended), with the child-environment fix and the bootstrap split (merged as #41); PR 4 delete (migration 0012 restore guard; `DELETE /documents/{id}`; ADR 0025 amended; merged as #42); PR 5 document list (`GET /documents`, ADR 0029 amended; merged as #43); PR 6 replace and swap (merged as #44; migration 0013); PR 7 purge (merged as #45; migration 0014); PR 8 queue cleanup (definer `cleanup_finished_jobs`, daily; ADR 0028 amended; merged as #46); PR 9 is the sweep timer (merged as #50). | ✅ Merged (PRs #39 to #46 and #50). |
 
-**Dev actions before PR 3 is migrated (the operator runs these, in this order):** run RUNBOOK step 4b (`bootstrap_definer_roles.sql`, no secrets) to create `retry_definer`, then `alembic upgrade head`. Step 4a (login roles) is unchanged. The dev database must be at `0010` before `0011`: migration 0010 is merged, so run `alembic upgrade head` once after step 4b and it applies both.
 | 8 | End-to-end with `demo-data/`, `UPLOAD_ENABLED` on | ✅ Live run on the dev machine, results below. Runbook fixes in PR #49 (awaiting merge). |
 
 **Session 4 is complete (2026-10-26).** Every step is merged. Step 8 ran end to end on the dev machine with the real model, the real worker and `UPLOAD_ENABLED` on. The only open PR from this session is #49 (runbook fixes), which is awaiting merge.
