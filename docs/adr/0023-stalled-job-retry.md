@@ -70,3 +70,7 @@ The change:
 - The sweep does not use the Procrastinate App. It calls the function in one transaction and commits.
 
 Verified by: a sweep where one stalled version already has a waiting job and another has none defers exactly one new job, and the existing job is the same row afterwards (`tests/db/test_stalled_retry.py::test_a_version_with_a_waiting_job_is_skipped_and_its_job_is_untouched`). With the per-version block removed, that test fails.
+
+## Amendment (PR 9, 2026-10-25): the sweep runs on the worker's timer
+
+The sweep was registered as a Procrastinate periodic task. That crashed the worker at startup: Procrastinate's periodic deferrer runs as worker_user and defers jobs with any task name, which PR 3's decision keeps from worker_user (the crash was reproduced, and the integration test now catches it). The sweep is now `grounded.enqueue_stalled_ingest` called by an in-process timer (`jobs/sweeps.py`) every 5 minutes, starting at worker start. Nothing about the definer, its grants, or its queueing lock changed. The rules of the timer (no overlap, skip and log, failures logged without content, repeated failures warned) are in `jobs/sweeps.py` and `tests/test_sweep_timer.py`.

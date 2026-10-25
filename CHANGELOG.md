@@ -22,6 +22,7 @@ Dependency and tooling changes are listed here too.
 - Repository made public. Branch protection on `main` applied and verified through the API (T24).
 
 ### Fixed
+- The worker crashed at startup with `permission denied for function procrastinate_defer_periodic_job_v2`. Procrastinate's periodic deferrer runs as worker_user, which must not defer jobs (PR 3). The three sweeps (stalled retry, purge, queue cleanup) now run on an in-process timer, each calling its narrow definer. No periodic task is registered. An integration test runs the real worker loop as worker_user, and a planted periodic registration fails it (ADR 0023, 0027, 0028 amended; SECURITY T57).
 - The extraction child process received the worker's whole environment, including `WORKER_DATABASE_URL` with the worker's password. It now starts with an allow-list (PATH, SYSTEMROOT, TEMP, TMP) and is tested for it (SECURITY.md, "Extraction child environment").
 - `app_user` could set any version's status and point any document at any version of its tenant. The transition guard now allows `app_user` to retire a version and nothing else, and `app_user` loses UPDATE on `documents.current_version_id` (ADR 0026, migration `0010`). The guard's matrix test covers every status pair for both roles.
 - The worker checks the `worker_user` login once at startup. A wrong password stops it with `worker not started: database login failed for worker_user` and exit code 1, instead of a retry loop that kept it running.

@@ -124,8 +124,10 @@ GOOD_DOCX = _docx({"[Content_Types].xml": b"<Types/>", "word/document.xml": b"<w
 def test_upload_is_off_by_default(
     client: TestClient, accounts: Accounts, monkeypatch: MonkeyPatch
 ) -> None:
-    """The switch is off unless the environment turns it on; the test does not trust a developer's .env."""
-    monkeypatch.delenv("UPLOAD_ENABLED", raising=False)
+    """With the switch set off, the endpoint answers 404. The variable is set explicitly: a developer's backend/.env may
+    turn the switch on (the runbook's step 3a does), and the environment overrides that file. The default itself is tested
+    without any file (tests/test_upload_switch_default.py)."""
+    monkeypatch.setenv("UPLOAD_ENABLED", "false")
     get_settings.cache_clear()
     token = _admin_token(client, accounts)
     response = _post(client, token, name="policy.txt", data=TEXT)

@@ -70,6 +70,7 @@ failed once in three full DB runs. Being fixed in a separate PR before Step 1b (
 ## Later improvements (not yet scheduled)
 
 - **Failed-job retention (ADR 0028, decided in PR 8).** Failed queue jobs are kept indefinitely, for diagnosis, so they can grow without bound. Add a separate, longer retention window for failed jobs (30 to 90 days, to be chosen), in its own definer or as a second argument to `cleanup_finished_jobs`, with the same exact-grant tests as PR 8. Not scheduled.
+- **Worker sweep timer (PR 9).** The sweeps moved from Procrastinate periodic tasks to an in-process timer after Step 8 found the worker crashing at startup. Integration test added. Under review on `fix/worker-sweep-timer`.
 - **Separate `valkey-test` service in the test profile.** The test Valkey shares the dev Valkey container, on
   database 15, and the test fixture flushes that database. Postgres already has a separate `postgres-test`
   service on port 5433. Mirror that for Valkey, so tests never touch the dev instance's data (ADR 0006 pattern).

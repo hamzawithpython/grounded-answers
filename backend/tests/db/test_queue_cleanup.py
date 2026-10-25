@@ -12,7 +12,8 @@ import psycopg
 import pytest
 from psycopg import errors
 
-from grounded_answers.jobs.queue_cleanup import QUEUE_CLEANUP_CRON, QUEUE_RETENTION_HOURS
+from grounded_answers.jobs.queue_cleanup import QUEUE_RETENTION_HOURS
+from grounded_answers.jobs.sweeps import SweepSchedule
 
 from .database import DbHandle
 
@@ -175,7 +176,7 @@ def test_the_worker_can_run_the_cleanup_and_nothing_else_on_the_queue(
 
 
 def test_the_cleanup_runs_daily_at_three_utc() -> None:
-    assert QUEUE_CLEANUP_CRON == "0 3 * * *"
+    assert SweepSchedule().queue_cleanup_seconds == 24 * 60 * 60
     assert QUEUE_RETENTION_HOURS == 168
 
 

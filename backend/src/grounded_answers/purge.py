@@ -1,8 +1,8 @@
 """
 The purge (ADR 0027, ADR 0007, SECURITY.md "Data retention").
 
-A periodic sweep asks the definer grounded.enqueue_purge_jobs (migration 0014) for the due items, and defers one job for
-each. A job removes one item in one transaction. It locks the document row first, the same order as replacement, the
+The worker's timer runs a sweep every fifteen minutes (jobs/sweeps.py). It asks the definer grounded.enqueue_purge_jobs
+(migration 0014) for the due items, and defers one job for each. A job removes one item in one transaction. It locks the document row first, the same order as replacement, the
 swap and delete (ADR 0024):
 
 - kind 'document': a deleted document whose purge_after has passed. Its versions go first (children first), then the
@@ -33,9 +33,6 @@ from grounded_answers.tenant_db import WorkerContext, begin_worker_transaction
 
 logger = logging.getLogger(__name__)
 
-PURGE_SWEEP_TASK: Final = "grounded.purge_sweep"
-# Every fifteen minutes. A due item is purged within that interval after its purge_after.
-PURGE_SWEEP_CRON: Final = "*/15 * * * *"
 
 # Locks the document. It also reports whether the document is deleted and its retention has passed, so the due check
 # happens under the lock. The worker's lock policy admits deleted documents (observed, test_worker_document_lock).
@@ -231,10 +228,10 @@ async def sweep_purge(*, session_factory: async_sessionmaker[AsyncSession]) -> t
     return enqueued, already_waiting
 
 
-def register_purge(
+def register_purge_task(
     app: procrastinate.App, *, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
-    """Register the purge job and its periodic sweep on the worker's app (ADR 0027)."""
+    """Register the purge job on the worker's app. The sweep that enqueues these jobs runs in the worker's timer."""
 
     @app.task(name=PURGE_ITEM)
     async def purge_item_task(tenant_id: str, kind: str, item_id: str) -> None:
@@ -246,8 +243,3 @@ def register_purge(
             kind="document" if kind == "document" else "version",
             item_id=uuid.UUID(item_id),
         )
-
-    @app.periodic(cron=PURGE_SWEEP_CRON)
-    @app.task(name=PURGE_SWEEP_TASK)
-    async def purge_sweep(timestamp: int) -> None:
-        await sweep_purge(session_factory=session_factory)
