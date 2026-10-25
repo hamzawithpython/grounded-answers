@@ -65,7 +65,9 @@ def test_login_roles_have_no_superuser_or_bypassrls(catalog: psycopg.Connection,
     assert attrs["rolcanlogin"] is True
 
 
-@pytest.mark.parametrize("role", ["auth_definer", "retention_definer", "provisioning_definer"])
+@pytest.mark.parametrize(
+    "role", ["auth_definer", "retention_definer", "provisioning_definer", "retry_definer"]
+)
 def test_definer_roles_are_nologin_and_not_bypassrls(
     catalog: psycopg.Connection, role: str
 ) -> None:

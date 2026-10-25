@@ -20,7 +20,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 from grounded_answers.extract.child import from_json
@@ -47,6 +47,19 @@ class ExtractionFailed(Exception):
             raise ValueError("an extraction failure must use one of the four generic reasons")
         super().__init__(reason)
         self.reason = reason
+
+
+# The only environment variables the child receives. The worker's environment holds WORKER_DATABASE_URL, which
+# carries the worker's password, and the settings of the other processes. The child needs none of them (SECURITY.md,
+# "Extraction child environment"). PATH finds the interpreter's DLLs, SYSTEMROOT is needed by Windows itself,
+# and TEMP and TMP are where Python puts temporary files on Windows.
+CHILD_ENVIRONMENT_NAMES: Final = ("PATH", "SYSTEMROOT", "TEMP", "TMP")
+
+
+def child_environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment for the child: only CHILD_ENVIRONMENT_NAMES that are set in source (default: os.environ)."""
+    env = os.environ if source is None else source
+    return {name: env[name] for name in CHILD_ENVIRONMENT_NAMES if name in env}
 
 
 def _child_command(kind: str) -> list[str]:
@@ -106,6 +119,7 @@ def _start(command: list[str]) -> subprocess.Popen[bytes]:
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=child_environment(),
         **options,
     )
 
