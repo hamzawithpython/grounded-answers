@@ -1,6 +1,6 @@
 # ADR 0025: Deleting a document
 
-**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 4.
+**Status:** Accepted (Session 4, Step 7, PR 1). Built in PR 4; amended in PR 4 (restore guard, 404 decision).
 
 **Date:** 2026-10-24
 
@@ -48,3 +48,11 @@ A deleted or unknown document returns **404**. A second delete does not succeed.
 ## Related
 
 - ADR 0007 (retention), ADR 0022 (rowcount), ADR 0026 (guard), ARCHITECTURE §5.3, §5.6.
+
+## Amendment (PR 4, 2026-10-25): restore guard, the 404 decision, and a temporary retention constant
+
+- **Restore is refused by the database.** `app_user` holds UPDATE on `documents.deleted_at`, so nothing stopped it from clearing the field, which would bring a deleted document back with its chunks. Migration `0012_document_delete` adds a BEFORE UPDATE trigger, `documents_no_restore`: once `deleted_at` is set, `app_user` and `worker_user` may not clear it (`insufficient_privilege`, "may not restore a deleted document"). This is an addition to ADR 0026's guard, for the documents table; it is narrow and does not change any grant.
+- **Repeat delete and unknown id both answer 404 with the same body.** A 204 on a repeat would tell the caller that a deleted id still names something. After the first delete the document is absent to every read (retrieval, and GET /documents when it exists in PR 5), so a 404 says only what a read says. The state is the same either way, so the operation stays idempotent. Another tenant's document also gets this 404: RLS hides it, so the caller cannot tell it from an unknown id.
+- **Employee gets 403 before any lookup.** The role check runs first, so a 403 reveals nothing about the document.
+- **Retention is a temporary constant.** `TEMPORARY_RETENTION_DAYS = 30` in `documents_api.py` stands in for `DOCUMENT_RETENTION_DAYS` until PR 7 adds the setting (ADR 0027). It is marked in the code, and PR 7 replaces it.
+- **A worker that is mid-write loses cleanly.** The delete retires a `processing` version. The worker's finish requires `status = 'processing'` and its fencing token, so its write matches zero rows and reports `LOST`, with no chunks and no ready audit row (`tests/db/test_document_delete.py::test_a_worker_finishing_a_deleted_version_loses_cleanly`). The race is simulated by committing the delete from the event loop while the worker's thread is embedding.
