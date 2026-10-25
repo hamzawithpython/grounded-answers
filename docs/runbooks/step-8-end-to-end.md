@@ -175,7 +175,9 @@ if ($lines -match "^UPLOAD_ENABLED=") {
 } else {
     $lines += "UPLOAD_ENABLED=true"
 }
-Set-Content -Path $envFile -Value $lines -Encoding utf8
+# Windows PowerShell 5.1's "-Encoding utf8" writes a byte-order mark (BOM) first. Other tools may read it as part of
+# the first key, so write the file as UTF-8 without a BOM.
+[IO.File]::WriteAllLines((Resolve-Path $envFile), [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
 Select-String -Path $envFile -Pattern "^UPLOAD_ENABLED="
 ```
 
