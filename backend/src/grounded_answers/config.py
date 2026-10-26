@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # How many chunks retrieval returns to the answer step (ADR 0030). 5 and 8 are compared in the answer evaluation.
     retrieval_top_k: int = Field(default=5, ge=1, le=20)
 
+    # Answer-model API keys (ADR 0031). Read from backend/.env only, held as SecretStr so they never print.
+    # Groq and Gemini free tiers take fictional data only. A real client's key is their own paid, no-training key.
+    groq_api_key: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
+
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",
         env_file_encoding="utf-8",

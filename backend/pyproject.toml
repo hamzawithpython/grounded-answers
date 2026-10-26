@@ -11,6 +11,7 @@ dependencies = [
     "argon2-cffi>=25.1.0",
     "cryptography>=50.0.2",
     "fastapi>=0.158.1",
+    "httpx>=0.28.1,<1",
     "markdown-it-py==4.2.0",
     "numpy==2.5.4",
     "onnxruntime==1.31.0",
@@ -33,7 +34,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "httpx2>=0.1.0",
     "mypy>=2.4.0",
     "pytest>=9.1.1",
     "ruff>=0.17.1",
