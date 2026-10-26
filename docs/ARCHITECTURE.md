@@ -522,7 +522,7 @@ flowchart TD
 
 With `ASK_ENABLED=true` the web process loads the pinned embedding model after startup, in a background thread, so the app takes requests at once and `/ready` answers 503 `embedder` until the model is loaded (and stays 503 if the load fails). Embedding a question runs in a thread behind a semaphore of `EMBED_CONCURRENCY` slots (default 2). A caller waits at most 2 s for a slot (then 503 busy) and at most 3 s for the embedding (then 503 took too long). The process then holds about 0.76 GB steady and 1.1 GB at the peak of the load, whatever the concurrency (`docs/EVAL.md`). With `ASK_ENABLED` off (the default) none of this exists: no model is loaded and `/ready` does not wait for one.
 
-### 6.3 The `/ask` flow (Session 5, Step 5c-1, ADR 0033; the HTTP layer is Step 5c-2)
+### 6.3 The `/ask` flow (Session 5, Steps 5c-1 and 5c-2, ADR 0033)
 
 ```mermaid
 flowchart TD
@@ -550,6 +550,10 @@ flowchart TD
 ```
 
 The slot taken at "in-flight" is released in every case, including an exception and a cancelled request. No database connection is held while the model is called: settings, retrieval and metering each run in their own short transaction. Every stage has a timeout inside the 12 s deadline; the metering write runs after it. Logs carry a request id, a keyed hash of the tenant id (`log_ref.py`), codes, counts and timings, and nothing else.
+
+### 6.4 `POST /ask` over HTTP (Session 5, Step 5c-2, ADR 0033)
+
+Mounted only when `ASK_ENABLED` is on. `authenticated_principal` verifies the token and re-checks the caller in the database like every protected route, then releases its connection before the route runs; the route takes the tenant and the user from the principal and never from the body. The flow of 6.3 does the work, each stage in its own short transaction (`ask/store.py`). The response is one of: 200 answered (answer and citations with document, version, clause or section, heading and quote), 200 refused (a code and our fixed message), 429 (`rate_limited`, `busy`, `daily_limit`, with `Retry-After`), 503 (`not_configured`, `try_again`, `service_unavailable`) or 500 (no detail). All carry `Cache-Control: no-store` and a `request_id`. The provider registry holds an adapter only for a configured key; a tenant's first listed provider is the only one used (fallback is Session 9).
 
 ## 7. Row-Level Security summary
 

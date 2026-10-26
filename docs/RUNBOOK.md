@@ -693,6 +693,31 @@ uv run python -m grounded_answers.evaluation.embed_concurrency $d --report .\.ev
 
 Expect a table of five cases (limit 1, 2 and 4 with as many callers, then limits 1 and 2 with four callers) and exit code 0. On a host with fewer CPUs than 4, expect the gain from 2 slots to shrink: if 2 slots give under about 20 % more throughput than 1, set `EMBED_CONCURRENCY=1`.
 
+## Turning on `POST /ask` and the live check (ADR 0033, Step 5c-2)
+
+**Turn it on** (in `backend\.env`, then restart the API): `ASK_ENABLED=true`, `EMBEDDING_MODEL_DIR=<the pinned model directory>` (see "Embedding model files and the worker"), and at least one provider key (`GROQ_API_KEY`). The tenant needs settings (next sections): `set-tenant-settings <slug> --data-class fictional --providers groq --daily-cap-usd 0.05`. Check `/ready`: it answers 503 `embedder` for about 10 seconds while the model loads, then 200.
+
+**Ask a question** (PowerShell; the token comes from `/auth/login`):
+
+```powershell
+$h = @{ Authorization = "Bearer $token" }
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/ask -Headers $h -ContentType "application/json" -Body (@{ question = "How many days of notice do I need to give?" } | ConvertTo-Json)
+```
+
+Expect `status` `answered` with `answer` and `citations`, or `refused` with a `reason` and a `message`. A refusal is a normal answer. An error shows as an HTTP status: 429 (limit, with `Retry-After`), 503 (`code` `not_configured`, `try_again` or `service_unavailable`) or 422 (the question: 1 to 1,000 characters, nothing else in the body). Every response has a `request_id`; the log line with the same `request_id` says what happened, and the `answer_usage` row has the tokens and cost.
+
+**The live check** (outside CI; the 8 demo documents, the real embedding model, the real endpoint, a real answer model; about 4 minutes; needs about 1.5 GB free). Same environment as "Retrieval evaluation", then:
+
+```powershell
+$env:EVAL_ASK_LIVE = "dry"      # rehearsal: a fake model, no network, no key
+uv run pytest -m eval -s -k ask_live
+$env:EVAL_ASK_LIVE = "groq"     # live: real Groq, fictional data only, needs GROQ_API_KEY in backend\.env
+$env:EVAL_ASK_LIMIT = "5"       # questions, at most 10
+uv run pytest -m eval -s -k ask_live
+```
+
+Expect `1 passed`, a table of the questions (ids, HTTP status, result, citations, wall time) and the `answer_usage` rows (outcome, tokens, cost, latency). The live run counts against Groq's free tier (about 200,000 tokens a day; one answer is about 1,900 tokens). Ask before running it. The test rebuilds `grounded_answers_test`, so do not run it beside `pytest -m db`. It carries the `live` marker: it is the only kind of test that keeps the provider keys and the network. Every other test runs with the keys removed and a guard that fails it if it tries to leave the machine (`tests/network_guard.py`); if a new test fails with `network guard: the test tried to reach outside this machine`, give it a fake instead of marking it `live`.
+
 ## `/ask` limits and the metering flag (ADR 0033, Step 5c)
 
 Settings in the web app's environment (`backend\.env`): `ASK_RATE_USER_PER_MIN` (5), `ASK_RATE_TENANT_PER_MIN` (20), `ASK_INFLIGHT_PER_TENANT` (2, how many questions of one tenant may be in progress), `ASK_DEADLINE_SECONDS` (12, range 5 to 30, the whole request budget). A tenant's daily cap and providers are set with the admin CLI (next section).

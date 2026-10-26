@@ -1,7 +1,7 @@
 """
 docs/DEPENDENCIES.md lists every direct dependency of pyproject.toml by exact PyPI name.
 
-A near-miss name (`httpx2` for `httpx`) sat in the scaffold unnoticed. This guard makes adding, removing or renaming a
+An unverified near-name package (`httpx2`, for `httpx`) was in the scaffold and was not reviewed by exact name. This guard makes adding, removing or renaming a
 direct dependency a visible, reviewed change: the list and the project must agree.
 """
 

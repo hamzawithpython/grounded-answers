@@ -98,6 +98,31 @@ def _bearer_token(authorization: str | None) -> str:
     return token
 
 
+def _verified_context(request: Request, authorization: str | None) -> TenantContext:
+    """
+    Verify the bearer token and return the tenant and user it names. Shared by every protected route, so a refusal
+    here is the same refusal everywhere (the parity test in tests/db/test_principal_parity.py checks it).
+    """
+    token = _bearer_token(authorization)
+    try:
+        claims = verify_access_token(token, request.app.state.key_ring)
+    except InvalidAccessToken as exc:
+        # The reason stays server-side. Clients get one message.
+        logger.info("access.rejected reason=%s", exc)
+        raise _not_authenticated() from exc
+    return TenantContext(tenant_id=claims.tenant_id, user_id=claims.user_id)
+
+
+async def _checked_principal(session: AsyncSession, context: TenantContext) -> Principal:
+    """Re-check the caller inside the tenant transaction. A refusal becomes the route's HTTP error."""
+    try:
+        return await load_principal(session, context)
+    except MembershipRejected as exc:
+        if exc.status_code == 401:
+            raise _not_authenticated() from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 async def authenticated_context(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
@@ -108,29 +133,33 @@ async def authenticated_context(
     The token's tid and sub are only used to open the transaction. The membership and tenant
     checks run inside it, so RLS applies to them, and the role is read from the row.
     """
-    token = _bearer_token(authorization)
-    try:
-        claims = verify_access_token(token, request.app.state.key_ring)
-    except InvalidAccessToken as exc:
-        # The reason stays server-side. Clients get one message.
-        logger.info("access.rejected reason=%s", exc)
-        raise _not_authenticated() from exc
-
-    context = TenantContext(tenant_id=claims.tenant_id, user_id=claims.user_id)
+    context = _verified_context(request, authorization)
     async with begin_tenant_transaction(request.app.state.session_factory, context) as session:
-        try:
-            principal = await load_principal(session, context)
-        except MembershipRejected as exc:
-            if exc.status_code == 401:
-                raise _not_authenticated() from exc
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        principal = await _checked_principal(session, context)
         yield RequestContext(session=session, principal=principal)
+
+
+async def authenticated_principal(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> Principal:
+    """
+    The same checks as authenticated_context, but the transaction ends before the route runs (ADR 0033, D1).
+
+    For a route that does slow work, such as POST /ask calling a model: it must not hold a database connection for
+    the whole request. The route opens its own short transactions with the tenant and user from the principal.
+    """
+    context = _verified_context(request, authorization)
+    async with begin_tenant_transaction(request.app.state.session_factory, context) as session:
+        return await _checked_principal(session, context)
 
 
 AuthenticatedRequest = Annotated[
     RequestContext,
     Depends(authenticated_context, scope="function"),
 ]
+
+AuthenticatedPrincipal = Annotated[Principal, Depends(authenticated_principal)]
 
 
 LIMITED_MESSAGE = "Too many attempts. Try again later."

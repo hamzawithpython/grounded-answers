@@ -342,6 +342,34 @@ On moderate overlap a larger `ef_search` (200 or more) matches exact search at a
 - Closed-loop load, short evaluation questions. A question near the 1,000-character limit has more tokens (the model reads at most 512) and costs more than these; that was not measured.
 - Not measured: the web process with the model loaded while it also serves requests and database queries, and the cause of the lower throughput of a limit of 2 with four callers.
 
+### `POST /ask` live check (Session 5, Step 5c-2, ADR 0033)
+
+**Method.** `tests/db/test_ask_live.py` with `EVAL_ASK_LIVE=groq`, `EVAL_ASK_LIMIT=5` (RUNBOOK, "Turning on POST /ask and the live check"): a fresh tenant with the 8 fictional demo documents ingested through the real pipeline, the real embedding model in the web process (loaded in 4.8 s), the real database, Valkey, rate limiter and metering, and the real Groq adapter (`openai/gpt-oss-120b`, reasoning effort low), asked 5 of the 50 questions (every 10th: q001, q011, q021, q031, q041) through `POST /ask`. Approved at most 5 questions. One run; a smoke test of the whole path, not a measure of answer quality (Step 7).
+
+| Question | Answerable | HTTP | Result | Citations | Clause kind | Wall ms |
+|---|---|---|---|---|---|---|
+| q001 | yes | 200 | answered | 1 | clause | 812 |
+| q011 | yes | 200 | answered | 1 | clause | 1,068 |
+| q021 | **no** | 200 | refused (`not_in_documents`) | 0 | | 755 |
+| q031 | yes | 200 | answered | 1 | clause | 1,000 |
+| q041 | yes | 200 | answered | 1 | clause | 1,412 |
+
+The `answer_usage` rows (what the metering table recorded; codes and numbers only):
+
+| Outcome | Attempts | Retrieved | In tokens | Out tokens | Cost micro-USD | Model latency ms | Invalid codes |
+|---|---|---|---|---|---|---|---|
+| answered | 1 | 5 | 1,995 | 158 | 395 | 702 | none |
+| answered | 1 | 5 | 1,739 | 187 | 374 | 1,016 | none |
+| refused_not_in_documents | 1 | 5 | 1,852 | 86 | 330 | 687 | none |
+| answered | 1 | 5 | 1,629 | 161 | 341 | 922 | none |
+| answered | 1 | 5 | 1,367 | 178 | 312 | 1,359 | none |
+
+**Totals:** 9,352 tokens (about 4.7 % of Groq's 200,000 a day), 1,752 micro-USD ($0.001752 at list price), about $0.00035 an answer, against the SPEC target of $0.002. Wall time per question (the whole request: authentication, limits, embedding, retrieval, the model, validation and metering) p50 1.0 s, p95 1.4 s, against the SPEC target of 8 s; the endpoint itself added about 50 to 110 ms to the model's own latency.
+
+**What it shows.** The whole path works on real components: 4 of 4 answerable questions were answered with one validated citation each, located at clause level; the one unanswerable question was refused with our wording; no corrective retry and no invalid-output code occurred; every request left exactly one metering row with no text in it; the numbers agree with the Step 4 check (about 1,880 tokens and $0.00036 an answer, there with a direct call).
+
+**Limits.** 5 questions, one run, one provider. Whether the 4 answers are correct was not judged (the quote check proves the cited text exists, not that the answer is supported; groundedness is measured in Step 7). Latency is one machine, one network, one day.
+
 ### Limits
 
 - 45 pairs, so one pair is 0.022. The hybrid lead over vector search is a hypothesis: the old scratch figure of 0.76 is unexplained, and at k=10 vector search equals hybrid.

@@ -1,6 +1,6 @@
 # Direct dependencies
 
-Every package named in `backend/pyproject.toml` (the runtime list and every dependency group), by its **exact PyPI name**. A package that resembles a well-known one is not that package: `httpx2` sat in the scaffold unnoticed (LEARNING_LOG, Session 5 Step 3b). Review a dependency by its exact name, its owner and its repository, never by resemblance.
+Every package named in `backend/pyproject.toml` (the runtime list and every dependency group), by its **exact PyPI name**. A package that resembles a well-known one is not that package: `httpx2` was in the scaffold and was not reviewed by exact name until Session 5 Step 3b (LEARNING_LOG). Review a dependency by its exact name, its owner and its repository, never by resemblance.
 
 `tests/test_dependencies_documented.py` fails when `pyproject.toml` gains or loses a direct dependency that is not listed here, or when a row's PyPI link does not match its name. To add one: tell the user why, give the licence and an alternative (CLAUDE.md), check the PyPI page and its source repository by name, then add a row.
 
@@ -31,3 +31,7 @@ Licences were read from the installed packages' metadata on 2026-10-26. Transiti
 | `pytest` | dev | MIT | https://pypi.org/project/pytest/ | https://docs.pytest.org/en/latest/ | The test runner. |
 | `ruff` | dev | MIT | https://pypi.org/project/ruff/ | https://github.com/astral-sh/ruff | Linting and formatting (a CI gate). |
 | `click` | operator | BSD-3-Clause | https://pypi.org/project/click/ | https://github.com/pallets/click/ | The admin command line (ADR 0010). Not installed in the web image. |
+
+## Watch list (not dependencies)
+
+- **`httpx2`** (https://pypi.org/project/httpx2/, https://github.com/pydantic/httpx2). Replaced in Session 5 Step 3b by the established library already present (`httpx`), when it was an unverified near-name package. Checked again on 2026-10-26: by Tom Christie, "The next generation HTTP client", repository under the `pydantic` organisation (created 2026-05-11, contributors include the httpx maintainers), 22 releases, and Starlette 1.9.0's test client prefers it and deprecates the `httpx` fallback ("install `httpx2` instead"). It is probably httpx's successor. Not a dependency of this project. Revisit when Starlette drops the `httpx` fallback, or when the HTTP client is next chosen; review it by exact name, owner and repository first (the steps above). Until then the test client runs on `httpx` with Starlette's deprecation warning, locally and in CI.

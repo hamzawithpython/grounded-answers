@@ -4,8 +4,9 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
-from grounded_answers.config import get_settings
+from grounded_answers.config import Settings, get_settings
 from grounded_answers.runtime import selector_loop_factory
+from tests.network_guard import NetworkGuard, provider_key_names
 
 
 @pytest.fixture
@@ -33,6 +34,41 @@ def _reset_settings_and_env(monkeypatch: MonkeyPatch) -> Generator[None, None, N
     yield
 
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_provider_keys(
+    request: pytest.FixtureRequest, monkeypatch: MonkeyPatch
+) -> Generator[None, None, None]:
+    """
+    No test sees a real provider key (SECURITY R25).
+
+    The three keys are removed from the environment, and Settings stops reading backend/.env, where a developer's real
+    keys live; a test that needs a key sets one itself. Without this, a test that starts the real app builds real
+    adapters from those keys (one did, and tried to call Gemini). A test marked `live`, which calls a real provider on
+    purpose, keeps both.
+    """
+    if request.node.get_closest_marker("live") is None:
+        for name in provider_key_names():
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setitem(Settings.model_config, "env_file", None)
+        get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def network_guard(
+    request: pytest.FixtureRequest, monkeypatch: MonkeyPatch
+) -> Generator[NetworkGuard, None, None]:
+    """
+    Refuse any connection or name lookup that leaves this machine, and fail the test at its end if one was tried
+    (tests/network_guard.py). Off only for a test marked `live`.
+    """
+    guard = NetworkGuard(enabled=request.node.get_closest_marker("live") is None)
+    guard.install(monkeypatch)
+    yield guard
+    guard.assert_clean()
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

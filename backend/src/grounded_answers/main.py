@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +9,8 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from starlette.concurrency import run_in_threadpool
 
+from grounded_answers.ask.api import router as ask_router
+from grounded_answers.ask.wiring import build_ask_deps
 from grounded_answers.auth_api import router as auth_router
 from grounded_answers.auth_keys import KeyFileError, load_key_ring
 from grounded_answers.config import Settings, get_settings
@@ -65,6 +68,7 @@ async def _load_auth_state(app: FastAPI, settings: Settings, cache: Redis) -> No
     if len(rate_secret) < 32:
         raise RuntimeError("AUTH_RATE_LIMIT_HMAC_KEY must be at least 32 characters")
     app.state.cache = cache
+    app.state.rate_limit_hmac_key = rate_secret.encode("ascii")
     app.state.limiter = LoginLimiter(cache, rate_secret.encode("ascii"), wall_clock_ms)
     app.state.timing = TimingFloor(floor_seconds=settings.auth_login_floor_ms / 1000)
     app.state.upload_limiter = UploadLimiter(cache, rate_secret.encode("ascii"), wall_clock_ms)
@@ -139,13 +143,28 @@ def _make_lifespan(
             checks[EMBEDDER] = make_embedder_check(lambda: embedder.state)
         app.state.readiness = ReadinessChecker(checks)
         app.state.query_embedder = query_embedder
+        http_client: httpx.AsyncClient | None = None
         try:
             await _load_auth_state(app, settings, cache)
             if query_embedder is not None:
+                # POST /ask (ADR 0033): its parts are built once here, and tests take them from app.state.ask_deps.
+                http_client = httpx.AsyncClient()
+                app.state.ask_deps = build_ask_deps(
+                    settings,
+                    cache=cache,
+                    session_factory=app.state.session_factory,
+                    rate_key=app.state.rate_limit_hmac_key,
+                    log_key=app.state.auth_hmac_key,
+                    embedder=query_embedder,
+                    http_client=http_client,
+                )
+                app.state.ask_service = app.state.ask_deps.service()
                 # Loads in the background: the app takes requests at once and /ready says 503 until it is done.
                 query_embedder.start()
             yield
         finally:
+            if http_client is not None:
+                await http_client.aclose()
             if query_embedder is not None:
                 await query_embedder.aclose()
             await engine.dispose()
@@ -208,6 +227,8 @@ def create_app(readiness: ReadinessChecker | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(documents_router)
     app.include_router(documents_list_router)
+    if settings.ask_enabled:
+        app.include_router(ask_router)
     # The body cap runs in front of every parser, so a large upload is refused while it streams
     # (ADR 0019, decision D2). Only the upload path is limited.
     app.add_middleware(UploadBodyLimit, path="/documents", max_bytes=MAX_BODY_BYTES)

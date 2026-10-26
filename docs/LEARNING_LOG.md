@@ -755,7 +755,7 @@ Google's reference examples put the key in the URL (`?key=...`). URLs end up in 
 Groq's free tier allows 8,000 tokens a minute and 200,000 a day. A 50-question run of 1,570-token prompts is about 78,000 tokens and 13 minutes. The runner paces its calls, stops at a token budget, and the report says what was used.
 
 ### `httpx2` sat in the scaffold unnoticed: review every direct dependency by exact name, not by resemblance
-The first scaffold commit declared `httpx2` as a dev dependency, probably meaning `httpx` (used by the web framework's test client). It was never imported, so nothing broke, and it stayed through every session. It turned out to be a real package (a continuation of httpx maintained by the Pydantic organisation), but that is luck, not a control: a near-miss package name is the classic way a malicious package gets in (typosquatting), and my own live runs sent API keys through it before the review caught it. The review note was right to ask for the exact name.
+The first scaffold commit declared `httpx2` as a dev dependency, probably meaning `httpx` (used by the web framework's test client). Our code never imported it (Starlette's test client picked it up when present), so nothing broke, and it stayed through every session. It had never been reviewed by exact name: an unverified package with a name close to a well-known one, and my own live runs sent API keys through it before the review caught it. The review note was right to ask for the exact name, and it was replaced by the established library that was already installed. Later evidence (checked 2026-10-26) shows the package is probably not hostile: Starlette 1.9.0's own test client deprecates the `httpx` fallback in favour of `httpx2`, and the repository is `pydantic/httpx2`, from the httpx maintainers, so it is likely httpx's successor (a watch item in `docs/DEPENDENCIES.md`). The Session 1 notes in this log also record that it was added on purpose, for Starlette's test client, so the real gap was the missing review by exact name, not an unknown package.
 
 What changed: the real `httpx` is now the declared dependency, `docs/DEPENDENCIES.md` lists every direct dependency with its exact PyPI name, licence, link and reason, and a unit test fails when `pyproject.toml` and that list disagree (checked by adding a fake `httpx2` and watching it fail).
 
@@ -847,3 +847,26 @@ A: The first reads code and is cheap, but it can only see names. The second runs
 
 ### Read your own claim twice
 While writing up the embedding measurements I first claimed the mean latency was the same for every limit. Re-reading the table showed it was not (the throughput differed). The wording was fixed before anyone relied on it. Numbers in a table are easy to summarise wrongly.
+
+## Session 5, Step 5c-2 (`POST /ask` over HTTP): plain words
+
+### A lighter check must be proven not to be a weaker check
+The endpoint takes its caller from a new dependency that gives its database connection back before the slow work. That is only safe if it refuses everything the old dependency refuses. So one test sends the same bad requests (no header, expired token, wrong key, a suspended tenant, a changed role, and more) to both and requires the same status, body and header. The two dependencies also share their code, so they cannot drift quietly, and a contrast test shows the old one really does hold a connection, so the "no connection held" test is able to fail.
+
+**Q: How do you test that a connection is not held during a slow call?**
+A: Ask the database. While the fake model sleeps, a probe reads `pg_stat_activity` and counts transactions of the app login that are "idle in transaction". It must be zero. A second route using the old dependency must show one, or the probe proves nothing.
+
+### Test fixtures can reach real services
+The first run of the HTTP tests tried to make one real request to Gemini (it ended as a timeout). One test named Gemini as the tenant's provider, and the app builds its adapters from the keys in `backend/.env`, which are real. The text was fictional and the quota cost nothing, but the lesson is general: when a test starts the real application, it also starts everything the application builds from real configuration. The fix has layers: the fixture swaps the provider registry for one that holds only a fake and asserts that; every test now runs with the provider keys removed and Settings not reading `backend/.env`; and a network guard refuses any connection that leaves the machine and fails the test at its end, so even an adapter that turns the refusal into "provider unavailable" cannot hide the attempt. A throwaway test that builds a real adapter fails on the guard, and each weakened version of the guard is caught. A rule that is only remembered is a rule that gets broken.
+
+### Test the wiring, not only the parts
+The limits are tested with a limiter built in the test. That would pass even if the application built its limiter with the two numbers swapped. A separate test reads the running application's parts and checks them against the settings, and a second app started with other settings must be built with those.
+
+### Measure what happened before saying it
+In the first draft of the dependency note I wrote that a package was a near-miss of another. Checking again, for an unrelated reason, showed that the framework itself recommends it and that its maintainers are the same people. The earlier caution was reasonable at the time, but the wording was too strong. The fix is to say what was checked and when, and to correct the record when new evidence arrives.
+
+### Tests that commit rows must remove them, and run them in the same order CI does
+CI failed on one old test after the `/ask` tests were added. That test runs as the database administrator, which sees every tenant's rows, and it expects a database with no one else's chunks. My new tests had committed chunks for their own tenants and left them behind. On my machine the suite ran in three chunks, each on a fresh database, so the leftovers never met the test; CI runs everything in one go, and they did. The fix is a shared cleanup used by every test that commits tenant data. The lesson is two rules: a test that commits shared data cleans up after itself, and before pushing, run the suite the way CI runs it (one invocation), not in pieces that hide contamination.
+
+**Q: Why did the chunked local runs pass when CI failed?**
+A: Each chunk rebuilt the database, so data left by one test could not reach a test in another chunk. The failure needed the leftover data and the sensitive test in the same run.
