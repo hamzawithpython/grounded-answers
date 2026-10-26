@@ -34,6 +34,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = BACKEND_DIR / "scripts"
 
 EXPECTED_TABLES = {
+    "answer_usage",
     "audit_log",
     "chunks",
     "document_blobs",
@@ -43,6 +44,7 @@ EXPECTED_TABLES = {
     "refresh_tokens",
     "tenant_email_domains",
     "tenant_memberships",
+    "tenant_settings",
     "tenants",
     "users",
 }
@@ -160,3 +162,36 @@ def test_upgrade_downgrade_upgrade_round_trip(grounded_db: DbHandle, roundtrip_d
             "triggers missing after the second upgrade: three updated_at triggers, the worker "
             "transition guard (ADR 0022) and the document restore guard (ADR 0025, migration 0012)"
         )
+
+
+def test_upgrade_gives_existing_tenants_the_fail_closed_settings(
+    grounded_db: DbHandle, roundtrip_db: str
+) -> None:
+    """A tenant that exists before 0017 gets a settings row with no providers, 'real' and cap 0 (ADR 0033)."""
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    migration_url = _url_for_db(
+        grounded_db.admin_url,
+        roundtrip_db,
+        "migration_role",
+        grounded_db.passwords["migration_role"],
+    )
+    admin_parts = urlsplit(grounded_db.admin_url)
+    admin_url = urlunsplit((admin_parts.scheme, admin_parts.netloc, f"/{roundtrip_db}", "", ""))
+
+    with _migration_env(migration_url):
+        command.upgrade(cfg, "0016_drop_hnsw_index")
+        with psycopg.connect(admin_url) as admin:
+            admin.execute(
+                "INSERT INTO grounded.tenants (id, name, slug) "
+                "VALUES (gen_random_uuid(), 'Old Tenant', 'old-tenant')"
+            )
+            admin.commit()
+        command.upgrade(cfg, "head")
+
+    with psycopg.connect(admin_url) as admin:
+        row = admin.execute(
+            "SELECT s.answer_providers, s.data_class, s.daily_cost_cap_micro_usd "
+            "FROM grounded.tenant_settings AS s JOIN grounded.tenants AS t ON t.id = s.tenant_id "
+            "WHERE t.slug = 'old-tenant'"
+        ).fetchone()
+    assert row == ([], "real", 0)

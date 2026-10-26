@@ -784,3 +784,23 @@ The plan said to find the clause by looking for numbers at the start of lines. O
 
 ### Keep model words away from users on a refusal
 A refusal carries a fixed reason code, and the wording comes from our code. A model that was tricked by text inside a document cannot put its own words in front of an employee that way.
+
+## Session 5, Step 5a (metering and tenant settings): plain words
+
+### Make the database refuse what the code must never store
+We want a usage table that can never hold what an employee asked. A rule like "the code does not write the question there" depends on every future change remembering it. So the table has no column that can hold a sentence: the few text columns accept only values from a fixed list, enforced by CHECK constraints in the database. A test tries to write a sentence into each text column and expects a refusal. If someone adds a new text column, another test fails until a person decides it may exist.
+
+**Q: Why put the allowed list in the database and not only in code?**
+A: A bug in code can store anything. The database is the last gate: it rejects a value that is not on the list whoever sends it. The cost is that the list exists twice (migration and code), so a test compares them.
+
+### A setting that can only be changed by the operator is part of the security model
+Which AI provider may see a tenant's documents is a privacy decision, not a preference. So the web app can only read the setting. Only the operator's tool can change it, it checks the combination (real data with a free-tier provider is refused), and it writes an audit row with the old and new value. The same check runs again before every call, so a wrong value in the database still cannot send real data to a demo-only provider.
+
+**Q: Why check the provider policy twice?**
+A: Once when the setting is written, so a mistake is caught early and explained. Once before each call, because the database could be edited by another route, and the cost of a wrong call (client data sent to a provider that may train on it) cannot be undone.
+
+### Money as whole numbers
+Costs are stored as millionths of a dollar in an integer column, and the CLI reads dollars with `Decimal`, not `float`. Floats cannot represent 0.05 exactly; sums of them drift. A cap compared against a drifting sum would sometimes allow one request too many or too few.
+
+### A name can be too long for the bookkeeping table
+The first migration id was 37 characters, and Alembic's version table holds 32. Every database test failed at setup with "value too long". The fix was a shorter id before anything persistent had used it. Once a migration is applied somewhere persistent, its id can never be changed, so check the length when you name it.

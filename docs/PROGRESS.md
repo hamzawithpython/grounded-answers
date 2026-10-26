@@ -13,9 +13,18 @@ Plan approved 2026-10-26. Each step has its own branch and PR, and stops for rev
 | 3a | Decision: answer model and provider (ADR 0031, decisions approved 2026-10-26) | ✅ Merged (PR #54) |
 | 3b | Provider test: `AnswerModel` interface, Groq/Gemini/Anthropic adapters, key handling, live run on the 50 questions | ✅ Merged (PR #55). Groq works (50 of 50). `gemini-2.5-flash-lite` is closed to new accounts (404), so Gemini 3.5 Flash-Lite replaces it (5 of 5, smoke test). Haiku offline-tested only (no paid account). Keys rotated 2026-10-26. |
 | 4 | Answer contract, citation validation, refusal (ADR 0032, decisions approved 2026-10-26) | ✅ Merged (PR #56). 5-question Groq check passed (no retries). |
-| 5 | `POST /ask` (builds the query-embedding path in the web process, see below) | Planned |
+| 5a | Metering and tenant settings (ADR 0033, decisions approved 2026-10-26): migration `0017_answer_usage_settings` (`answer_usage`, `tenant_settings`, RLS, three grants), `answering/policy.py`, `answering/usage.py`, admin commands `show-tenant-settings` and `set-tenant-settings` (audited) | Built on `feat/step-5a-metering-and-tenant-settings`, awaiting review. Dev DB needs `alembic upgrade head` after the merge. |
+| 5b | Query-embedding wiring in the web process: `ASK_ENABLED`, background load, `/ready` 503 `embedder`, bounded concurrency, latency and memory measured | Planned |
+| 5c | `POST /ask`: limits, in-flight limit, daily cap, provider policy at call time, deadline, logging with hashed tenant id, the sentinel tests | Planned |
 | 6 | Prompt-injection tests | Planned |
 | 7 | Answer evaluation (compare `RETRIEVAL_TOP_K` 5 and 8; cross-document answers may need more context) | Planned |
+
+**Step 5 decisions (ADR 0033):** any authenticated user, question only (1 to 1,000 characters); 200 for answers and refusals, 429 for limits and the cap, 503 for service errors; limits 5 per user and 20 per tenant per minute, in-flight limit per tenant a setting (default 2); daily cost cap per tenant in micro-USD from the metering table (demo tenant $0.05); counts and codes only about questions (no text, no user id); per-tenant provider list and data class, set only by the operator, checked at set time and at call time; 12 s deadline with stage budgets; query embedding loaded in the background; logs carry `request_id` and a keyed hash of the tenant id, never raw tenant, user or document ids (project-wide rule).
+
+**Notes from the Step 5 review (2026-10-26):**
+- `answer_usage` rows grow forever. A retention or rollup job is v1.1 work, and analytics (v1.1) will want a daily rollup.
+- Groq's per-minute token limit (8,000) is global across tenants, so the per-tenant cap does not protect it. The global daily cap in Session 9 does.
+- Alembic's version column holds 32 characters, so migration ids must be 32 characters or fewer (`0017_answer_usage_settings` is 26).
 
 **Step 3 decisions (ADR 0031):** demo tenant on Groq `openai/gpt-oss-120b`, free tier, fictional data only, reasoning effort `low`; candidates to test are Groq gpt-oss-120b, Gemini 2.5 Flash-Lite (free, fictional data only) and Claude Haiku 5.5 (paid reference, credit added by the operator); real client data needs all five points of ADR 0031 decision 3; local-only mode is a recorded future option; Groq is demo-only until its DPA confirms no training. The interface forbids user, tenant and email values in prompts (tested) and reports tokens, cost and latency per answer (in the eval report only in Step 3b; the per-tenant metering table with RLS, grants and catalog guard comes in Step 5 with `/ask` and the cost cap). Keys: `SecretStr`, `backend/.env` only, with a log-redaction test.
 
