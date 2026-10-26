@@ -35,6 +35,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     MetaData,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
@@ -456,4 +457,49 @@ class PasswordResetToken(Base):
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=_now()
+    )
+
+
+class TenantSettings(Base):
+    """Per-tenant answer settings, written by the operator only (ADR 0033, migration 0017)."""
+
+    __tablename__ = "tenant_settings"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.tenants.id", **_RESTRICT), primary_key=True
+    )
+    answer_providers: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
+    data_class: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'real'"))
+    daily_cost_cap_micro_usd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_now()
+    )
+
+
+class AnswerUsage(Base):
+    """One row per /ask request that reached the answer stage. Codes and numbers only, never text (ADR 0033)."""
+
+    __tablename__ = "answer_usage"
+    __table_args__ = (Index("answer_usage_tenant_created_idx", "tenant_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_now()
+    )
+    provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    retrieved_count: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    invalid_codes: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
     )

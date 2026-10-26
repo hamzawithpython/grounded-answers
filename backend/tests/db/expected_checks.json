@@ -1,5 +1,50 @@
 [
   {
+    "table": "answer_usage",
+    "name": "answer_usage_attempts_check",
+    "definition": "CHECK (((attempts >= 0) AND (attempts <= 2)))"
+  },
+  {
+    "table": "answer_usage",
+    "name": "answer_usage_cost_check",
+    "definition": "CHECK (((cost_micro_usd >= 0) AND (cost_micro_usd <= 10000000)))"
+  },
+  {
+    "table": "answer_usage",
+    "name": "answer_usage_invalid_codes_check",
+    "definition": "CHECK (((invalid_codes <@ ARRAY['invalid_output'::text, 'empty_answer'::text, 'no_citations'::text, 'bad_ref'::text, 'quote_ellipsis'::text, 'quote_too_short'::text, 'quote_too_long'::text, 'quote_not_informative'::text, 'quote_not_found'::text, 'number_not_grounded'::text]) AND (cardinality(invalid_codes) <= 2)))"
+  },
+  {
+    "table": "answer_usage",
+    "name": "answer_usage_latency_check",
+    "definition": "CHECK (((latency_ms >= 0) AND (latency_ms <= 600000)))"
+  },
+  {
+    "table": "answer_usage",
+    "name": "answer_usage_model_check",
+    "definition": "CHECK (((model IS NULL) OR ((char_length(model) >= 1) AND (char_length(model) <= 200))))"
+  },
+  {
+    "table": "answer_usage",
+    "name": "answer_usage_outcome_check",
+    "definition": "CHECK ((outcome = ANY (ARRAY['answered'::text, 'refused_not_in_documents'::text, 'refused_needs_clarification'::text, 'refused_conflicting_sources'::text, 'could_not_verify'::text, 'declined'::text, 'no_sources'::text, 'timeout'::text, 'provider_error'::text, 'provider_rate_limited'::text, 'provider_disallowed'::text, 'tenant_not_configured'::text, 'service_error'::text])))"
+  },
+  {
+    "table": "answer_usage",
+    "name": "answer_usage_provider_check",
+    "definition": "CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['groq'::text, 'gemini'::text, 'anthropic'::text]))))"
+  },
+  {
+    "table": "answer_usage",
+    "name": "answer_usage_retrieved_check",
+    "definition": "CHECK (((retrieved_count >= 0) AND (retrieved_count <= 20)))"
+  },
+  {
+    "table": "answer_usage",
+    "name": "answer_usage_tokens_check",
+    "definition": "CHECK ((((input_tokens >= 0) AND (input_tokens <= 10000000)) AND ((output_tokens >= 0) AND (output_tokens <= 10000000))))"
+  },
+  {
     "table": "audit_log",
     "name": "audit_log_action_check",
     "definition": "CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)))"
@@ -143,6 +188,21 @@
     "table": "tenants",
     "name": "tenants_status_check",
     "definition": "CHECK ((status = ANY (ARRAY['active'::text, 'suspended'::text])))"
+  },
+  {
+    "table": "tenant_settings",
+    "name": "tenant_settings_cap_check",
+    "definition": "CHECK (((daily_cost_cap_micro_usd >= 0) AND (daily_cost_cap_micro_usd <= 1000000000)))"
+  },
+  {
+    "table": "tenant_settings",
+    "name": "tenant_settings_data_class_check",
+    "definition": "CHECK ((data_class = ANY (ARRAY['fictional'::text, 'real'::text])))"
+  },
+  {
+    "table": "tenant_settings",
+    "name": "tenant_settings_providers_check",
+    "definition": "CHECK (((answer_providers <@ ARRAY['groq'::text, 'gemini'::text, 'anthropic'::text]) AND (cardinality(answer_providers) <= 3)))"
   },
   {
     "table": "users",

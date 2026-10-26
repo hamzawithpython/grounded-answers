@@ -16,12 +16,21 @@ email (ADR 0007 rule for audit detail).
 import json
 import re
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 import psycopg.errors
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from grounded_answers.answering.policy import (
+    ProviderPolicyError,
+    check_data_class,
+    check_providers,
+)
 from grounded_answers.passwords import PasswordPolicyError, check_password_policy, hash_password
 
 SLUG_RE = re.compile(r"^[a-z0-9-]{3,40}$")
@@ -87,7 +96,7 @@ async def _audit(
     action: str,
     target_type: str,
     target_id: uuid.UUID | None,
-    detail: dict[str, str | int],
+    detail: dict[str, Any],
 ) -> None:
     await session.execute(
         text(
@@ -123,6 +132,11 @@ async def create_tenant(session: AsyncSession, *, name: str, slug: str) -> uuid.
         if _is_unique_violation(exc):
             raise AdminError(f"Slug '{clean_slug}' is already in use.") from exc
         raise
+    # The fail-closed defaults (no providers, 'real', cap 0): the tenant gets no answers until the operator sets them.
+    await session.execute(
+        text("INSERT INTO grounded.tenant_settings (tenant_id) VALUES (:tenant_id)"),
+        {"tenant_id": tenant_id},
+    )
     await _audit(
         session,
         tenant_id=tenant_id,
@@ -317,3 +331,129 @@ async def record_account_unlock(
         target_id=None,
         detail={"keys_removed": keys_removed},
     )
+
+
+MICRO_PER_USD = 1_000_000
+MAX_DAILY_CAP_MICRO_USD = 1_000_000_000  # $1,000: the same bound as the table's CHECK.
+
+
+@dataclass(frozen=True)
+class TenantSettingsView:
+    answer_providers: tuple[str, ...]
+    data_class: str
+    daily_cost_cap_micro_usd: int
+
+
+def usd_to_micro(raw: str) -> int:
+    """Dollars as typed (for example 0.05) to whole millionths of a dollar. Decimal, never float."""
+    try:
+        amount = Decimal(raw.strip())
+    except InvalidOperation as exc:
+        raise AdminError("The daily cap must be a number of US dollars, for example 0.05.") from exc
+    if not amount.is_finite():
+        raise AdminError("The daily cap must be a number of US dollars, for example 0.05.")
+    micro = amount * MICRO_PER_USD
+    if micro != micro.to_integral_value():
+        raise AdminError("The daily cap can have at most 6 decimal places.")
+    if not 0 <= micro <= MAX_DAILY_CAP_MICRO_USD:
+        raise AdminError("The daily cap must be between 0 and 1000 US dollars.")
+    return int(micro)
+
+
+def micro_to_usd(micro: int) -> str:
+    return f"{Decimal(micro) / MICRO_PER_USD:.6f}"
+
+
+async def _read_settings(session: AsyncSession, tenant_id: uuid.UUID) -> TenantSettingsView | None:
+    result = await session.execute(
+        text(
+            "SELECT answer_providers, data_class, daily_cost_cap_micro_usd "
+            "FROM grounded.tenant_settings WHERE tenant_id = :tenant_id"
+        ),
+        {"tenant_id": tenant_id},
+    )
+    row = result.first()
+    if row is None:
+        return None
+    return TenantSettingsView(
+        tuple(row.answer_providers), row.data_class, int(row.daily_cost_cap_micro_usd)
+    )
+
+
+async def show_tenant_settings(session: AsyncSession, *, tenant_slug: str) -> TenantSettingsView:
+    """The tenant's answer settings. A tenant with no row is shown with the fail-closed defaults."""
+    tenant_id = await _tenant_id_for_slug(session, normalize_slug(tenant_slug))
+    return await _read_settings(session, tenant_id) or TenantSettingsView((), "real", 0)
+
+
+async def update_tenant_settings(
+    session: AsyncSession,
+    *,
+    tenant_slug: str,
+    providers: Sequence[str] | None,
+    data_class: str | None,
+    daily_cap_micro_usd: int | None,
+) -> dict[str, dict[str, Any]]:
+    """
+    Change a tenant's answer settings, check the result against the provider policy, and audit what changed.
+
+    None means "leave as it is". The policy (answering/policy.py) is checked on the settings as they will be, not
+    only on the new values: moving a tenant to 'real' while Groq is still listed is refused. A change that alters
+    nothing writes no audit row. The audit detail holds the old and new values of the fields that changed:
+    provider names, the data class and the cap. It holds no secret and no text.
+    Returns the changes (empty when nothing changed).
+    """
+    tenant_id = await _tenant_id_for_slug(session, normalize_slug(tenant_slug))
+    old = await _read_settings(session, tenant_id) or TenantSettingsView((), "real", 0)
+    try:
+        new_data_class = check_data_class(data_class) if data_class is not None else old.data_class
+        new_providers = check_providers(
+            providers if providers is not None else old.answer_providers, new_data_class
+        )
+    except ProviderPolicyError as exc:
+        raise AdminError(f"{exc} Nothing changed.") from exc
+    new_cap = old.daily_cost_cap_micro_usd if daily_cap_micro_usd is None else daily_cap_micro_usd
+    if not 0 <= new_cap <= MAX_DAILY_CAP_MICRO_USD:
+        raise AdminError("The daily cap must be between 0 and 1000 US dollars. Nothing changed.")
+    new = TenantSettingsView(new_providers, new_data_class, new_cap)
+
+    changes: dict[str, dict[str, Any]] = {}
+    if new.answer_providers != old.answer_providers:
+        changes["answer_providers"] = {
+            "old": list(old.answer_providers),
+            "new": list(new.answer_providers),
+        }
+    if new.data_class != old.data_class:
+        changes["data_class"] = {"old": old.data_class, "new": new.data_class}
+    if new.daily_cost_cap_micro_usd != old.daily_cost_cap_micro_usd:
+        changes["daily_cost_cap_micro_usd"] = {
+            "old": old.daily_cost_cap_micro_usd,
+            "new": new.daily_cost_cap_micro_usd,
+        }
+    if not changes:
+        return changes
+    await session.execute(
+        text(
+            "INSERT INTO grounded.tenant_settings "
+            "(tenant_id, answer_providers, data_class, daily_cost_cap_micro_usd) "
+            "VALUES (:tenant_id, :providers, :data_class, :cap) "
+            "ON CONFLICT (tenant_id) DO UPDATE SET answer_providers = EXCLUDED.answer_providers, "
+            "data_class = EXCLUDED.data_class, "
+            "daily_cost_cap_micro_usd = EXCLUDED.daily_cost_cap_micro_usd"
+        ),
+        {
+            "tenant_id": tenant_id,
+            "providers": list(new.answer_providers),
+            "data_class": new.data_class,
+            "cap": new.daily_cost_cap_micro_usd,
+        },
+    )
+    await _audit(
+        session,
+        tenant_id=tenant_id,
+        action="tenant_settings.update",
+        target_type="tenant",
+        target_id=tenant_id,
+        detail={"changes": changes},
+    )
+    return changes

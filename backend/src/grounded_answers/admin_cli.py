@@ -110,6 +110,14 @@ def _validated(check: Callable[[str], str], raw: str) -> str:
         raise click.ClickException(str(exc)) from exc
 
 
+def _validated_int(check: Callable[[str], int], raw: str) -> int:
+    """Like _validated, for a check that returns a number."""
+    try:
+        return check(raw)
+    except AdminError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @click.group()
 def main() -> None:
     """Platform-owner commands. They use MIGRATION_DATABASE_URL (migration_role, ADR 0004)."""
@@ -178,6 +186,58 @@ def create_admin_command(tenant_slug: str, email: str, display_name: str) -> Non
         )
     )
     click.echo(f"Created tenant admin ({user_id}) for tenant '{tenant_slug}'.")
+
+
+@main.command("show-tenant-settings")
+@click.argument("tenant_slug")
+def show_tenant_settings_command(tenant_slug: str) -> None:
+    """Show the answer providers, data class and daily cost cap of TENANT_SLUG."""
+    view = _run(lambda s: admin_service.show_tenant_settings(s, tenant_slug=tenant_slug))
+    click.echo(f"Providers: {', '.join(view.answer_providers) or '(none)'}")
+    click.echo(f"Data class: {view.data_class}")
+    click.echo(f"Daily cost cap: ${admin_service.micro_to_usd(view.daily_cost_cap_micro_usd)}")
+
+
+@main.command("set-tenant-settings")
+@click.argument("tenant_slug")
+@click.option(
+    "--providers",
+    default=None,
+    help="Comma-separated, in order of preference: groq, gemini, anthropic. Empty string = none.",
+)
+@click.option("--data-class", default=None, help="fictional or real.")
+@click.option(
+    "--daily-cap-usd", default=None, help="Daily cost cap in US dollars, for example 0.05."
+)
+def set_tenant_settings_command(
+    tenant_slug: str, providers: str | None, data_class: str | None, daily_cap_usd: str | None
+) -> None:
+    """
+    Change the answer settings of TENANT_SLUG (ADR 0033). Options you leave out stay as they are.
+
+    A tenant with real data may use only providers approved for real data. The change is audited.
+    """
+    provider_list = (
+        None
+        if providers is None
+        else [name.strip() for name in providers.split(",") if name.strip()]
+    )
+    cap = (
+        None if daily_cap_usd is None else _validated_int(admin_service.usd_to_micro, daily_cap_usd)
+    )
+    changes = _run(
+        lambda s: admin_service.update_tenant_settings(
+            s,
+            tenant_slug=tenant_slug,
+            providers=provider_list,
+            data_class=data_class,
+            daily_cap_micro_usd=cap,
+        )
+    )
+    if not changes:
+        click.echo(f"No change for tenant '{tenant_slug}'.")
+        return
+    click.echo(f"Updated tenant '{tenant_slug}': {', '.join(sorted(changes))}.")
 
 
 @main.command("unlock-account")

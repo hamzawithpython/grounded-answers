@@ -271,6 +271,40 @@ Policies (ADR 0018, amendment): `app_user` INSERT only, for a `queued` version o
 
 Append-only by grants: `app_user` has `INSERT` and `SELECT` only.
 
+### `tenant_settings` (ADR 0033, migration 0017)
+
+One row per tenant, written only by the operator (admin CLI, `migration_role`). The web app reads it. A tenant with no row, or with no providers, gets no answers (fail closed).
+
+| Column | Type | Notes |
+|---|---|---|
+| `tenant_id` | uuid PK | FK to `tenants` |
+| `answer_providers` | text[] | Ordered, from `groq`, `gemini`, `anthropic` (CHECK), at most 3. Default empty |
+| `data_class` | text | `fictional` or `real` (CHECK). Default `real` |
+| `daily_cost_cap_micro_usd` | bigint | 0 to 1,000,000,000 (CHECK). Default 0 |
+| `created_at` | timestamptz | |
+
+`answering/policy.py` decides which providers a data class allows; the admin CLI applies it when settings change and each change is audited (`tenant_settings.update`, old and new values).
+
+### `answer_usage` (ADR 0033, migration 0017)
+
+One row per `/ask` request that reached the answer stage. **Codes and numbers only.** The only text columns are `provider`, `model`, `outcome` and `invalid_codes`, and CHECK constraints limit all but `model` (length 1 to 200) to fixed lists, so the question, a source, an answer or a quote cannot be stored. No user id.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `tenant_id` | uuid | FK to `tenants`; index `(tenant_id, created_at)` serves the daily-cap sum |
+| `created_at` | timestamptz | |
+| `provider`, `model` | text, nullable | Null when the request failed before a provider was chosen |
+| `outcome` | text | One of `answering/usage.py` `OUTCOMES` |
+| `attempts` | smallint | 0 to 2 |
+| `retrieved_count` | smallint | 0 to 20 |
+| `input_tokens`, `output_tokens` | integer | 0 to 10,000,000 |
+| `cost_micro_usd` | bigint | List-price cost in millionths of a dollar |
+| `latency_ms` | integer | |
+| `invalid_codes` | text[] | At most 2, from `INVALID_CODES` |
+
+`app_user` may `SELECT` and `INSERT` its own tenant's rows. Nobody but the owner can `UPDATE` or `DELETE`. Rows are never removed in v1 (retention or rollup is v1.1 work).
+
 ### `refresh_tokens`
 
 | Column | Type | Constraints |
@@ -494,6 +528,8 @@ flowchart TD
 | `documents` | ENABLE + FORCE | `app_user`: scoped to current tenant. `worker_user`: scoped to current tenant, SELECT and DELETE (DELETE only when deleted and with no versions left). |
 | `document_versions` | ENABLE + FORCE | `app_user`: scoped to current tenant. `worker_user`: scoped to current tenant. UPDATE only `retired` to `purging`. DELETE only when `purging`. |
 | `audit_log` | ENABLE + FORCE | `app_user`: scoped to current tenant, `INSERT` and `SELECT` only. `worker_user`: `INSERT` only. |
+| `tenant_settings` | ENABLE + FORCE | `app_user`: `SELECT`, own tenant. `migration_role`: all (the admin CLI). |
+| `answer_usage` | ENABLE + FORCE | `app_user`: `SELECT` and `INSERT`, own tenant (`WITH CHECK`). `migration_role`: all. No `UPDATE` or `DELETE` for any app role. |
 | `refresh_tokens` | ENABLE + FORCE | `app_user`: scoped to current tenant. `auth_definer`: SELECT (refresh). |
 | `password_reset_tokens` | ENABLE + FORCE | `app_user`: scoped to current tenant (SELECT, INSERT, UPDATE). |
 | `tenants` | ENABLE + FORCE | `app_user`: SELECT own row only. `auth_definer`: SELECT (login, `status` only). `migration_role`: all (operator). |

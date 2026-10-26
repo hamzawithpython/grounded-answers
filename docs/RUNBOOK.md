@@ -670,6 +670,23 @@ A backup holds deleted content until the provider's backup window expires (SECUR
 
 **The purge job exists now (ADR 0027).** The restore rule is: **after any restore from backup, run the purge again before the app serves users.** A restore brings back documents and versions whose purge date has passed, and the purge removes them again. The procedure:1. Restore into a new database, never over the live one.2. Start the worker against the restored database, with `DOCUMENT_RETENTION_DAYS` set to the value the live system uses. The purge sweep runs when the worker starts and then every 15 minutes, so wait for two sweep runs (the worker logs `purge.sweep`).3. Check that nothing due is left. This query must return `0`:   ```sql   SELECT (SELECT count(*) FROM grounded.documents WHERE deleted_at IS NOT NULL AND purge_after < now())        + (SELECT count(*) FROM grounded.document_versions AS v JOIN grounded.documents AS d             ON d.tenant_id = v.tenant_id AND d.id = v.document_id           WHERE v.status = 'retired' AND v.purge_after < now() AND d.deleted_at IS NULL);   ```4. Check the audit log: each purged item has a `document.purged` or `document_version.purged` entry from the restore window.5. Only then point the app at the restored database, and check `/ready`.A purge that is still running, or a failed purge job, leaves its item in place. Look at the job queue (`queue.procrastinate_jobs`, `status`) and the worker log. Do not point the app at the database until step 3 returns `0`.
 
+## Tenant answer settings (ADR 0033)
+
+Every tenant needs a settings row before `/ask` (Step 5c) will answer for it. `create-tenant` makes the row with the fail-closed defaults: no providers, data class `real`, cap $0. Set the real values with the admin CLI, in the shell where `MIGRATION_DATABASE_URL` is set (see "Admin CLI"):
+
+```powershell
+uv run --group operator python -m grounded_answers.admin_cli show-tenant-settings indus-freight
+uv run --group operator python -m grounded_answers.admin_cli set-tenant-settings indus-freight --data-class fictional --providers groq --daily-cap-usd 0.05
+```
+
+Expect `Updated tenant 'indus-freight': answer_providers, daily_cost_cap_micro_usd, data_class.` Options you leave out stay as they are; `--providers ""` clears the list. Run it twice and the second run says `No change` and writes no audit row.
+
+Rules the command enforces: providers are `groq`, `gemini`, `anthropic`, no repeats; a tenant with `--data-class real` may list only approved providers (today `anthropic`), checked on the settings as they will be, so moving a tenant to `real` while `groq` is listed is refused with `Nothing changed`; the cap is in US dollars with at most 6 decimals, 0 to 1000. Every change adds an audit row `tenant_settings.update` with the old and new values. See what changed (as the cluster admin, in psql): `SELECT detail FROM grounded.audit_log WHERE action = 'tenant_settings.update' ORDER BY created_at DESC LIMIT 5;`
+
+**Migration 0017 on the dev database.** The dev database is at `0016_drop_hnsw_index`. Run `alembic upgrade head` once (see "Migrations to head") after the PR that adds it is merged. Every existing tenant gets a settings row with the fail-closed defaults, so set the demo tenant's values with the command above. `/ready` returns 503 `schema` until the migration has run, because the code expects `0017_answer_usage_settings`.
+
+**Metering.** `answer_usage` holds codes and numbers only. Today's spend for a tenant (as the cluster admin): `SELECT sum(cost_micro_usd) / 1000000.0 AS usd FROM grounded.answer_usage WHERE tenant_id = '<id>' AND created_at >= date_trunc('day', now() AT TIME ZONE 'utc') AT TIME ZONE 'utc';`
+
 ## Deployment
 
 TBD: Add deployment instructions for production hosting.
