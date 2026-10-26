@@ -6,8 +6,14 @@ Dependency and tooling changes are listed here too.
 ## [Unreleased]
 
 ### Added
+- Retrieval (Session 5, Step 2, ADR 0030): `grounded_answers.retrieval.retrieve()`, hybrid search (exact vector search plus keyword search, reciprocal rank fusion with constant 60) as `app_user` in a tenant transaction. It returns the top `RETRIEVAL_TOP_K` chunks (new setting, default 5, range 1 to 20) with text, document title, version, section, heading and clause labels. The rankers moved from `evaluation` to `retrieval`. Tests: RLS, current-version rule, tenant isolation, k rows, the no-keyword-match fallback, determinism, input validation; three planted defects were each caught.
+- The evaluation harness reports recall@k and MRR@k at k = 3, 5, 8 and 10, the hybrid misses at each k, and the sensitivity to the fusion constant.
+- `tests/db/test_retrieval_scale.py` (marker `eval`, outside CI): the evidence for dropping the vector index, reproducible. 20 tenants and up to 28,000 chunks; the planner's choice as one tenant grows; pgvector settings on near-duplicate content.
 - Retrieval evaluation harness (Session 5, Step 1): `grounded_answers.evaluation` holds the question parsing, the hit rule, and the vector, keyword and hybrid rankers, which run as `app_user`. The report has recall@5, MRR, latency, per-type and score-distribution tables. The full run (`pytest -m eval -s`, real model, test database) is outside CI. A smoke test with a fake embedder runs in `-m db`. New pytest marker `eval`, deselected unless `-m` names it. `docs/EVAL.md` has the first results.
 - Test helpers: `make_version` can add a later version to an existing document, and `FakeEmbedder` has `query_embedding`.
+
+### Changed
+- Migration `0016_drop_hnsw_index` drops the HNSW index on `chunks.embedding` (ADR 0030, amends ADR 0021 decision 3). Retrieval is an exact search of the tenant's rows. `EXPECTED_SCHEMA_HEAD` is `0016_drop_hnsw_index`; the ORM model no longer declares the index.
 
 ### Documentation
 - PROGRESS: removed the stale "Dev actions before PR 3" paragraph. ARCHITECTURE section 6 now describes the chunks table (migration 0008). RUNBOOK: how to run the retrieval evaluation. EVAL: first database results.

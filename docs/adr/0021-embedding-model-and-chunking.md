@@ -118,3 +118,7 @@ Roman Urdu is only partly handled: e5-small finds two of three questions in the 
 **Session settings** (measured, `docs/EVAL.md`, "Runtime change"): 2 intra-op threads, one inter-op thread, the memory arena off, memory pattern off. On the S1 chunks, two threads with the arena off was the fastest configuration. The peak working set was the same for every configuration tried.
 
 **Cost.** Same-condition measurement (2026-10-23): one process, peak working set 1,123 MiB after loading the model (fastembed 0.9.0: 897 MiB). The gap is 226 MiB. It is not caused by padding, graph optimisation, memory pattern, the arena or the thread count (`docs/EVAL.md`, "Runtime change"). It is accepted, and the hosting requirement in decision 4 is about 1.1 GB per process. The first figures in this amendment came from different runs and are withdrawn.
+
+## Amendment (2026-10-26): retrieval strategy and the vector index (ADR 0030)
+
+Decision 3 left the retrieval strategy open. ADR 0030 decides it: hybrid search, vector and keyword fused by reciprocal rank (constant 60), no reranker. It also drops the HNSW index (migration `0016_drop_hnsw_index`), so vector search is an exact scan of the tenant's rows. The `tsvector` and its GIN index stay. The English-configuration limit in decision 3 still holds: a question with no keyword match keeps the vector order.

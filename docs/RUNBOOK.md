@@ -642,6 +642,7 @@ Before any downgrade, check what it removes:
 
 | Revision | Downgrade removes | Data loss | Effect on the app |
 |---|---|---|---|
+| 0016 | Recreates the vector index `chunks_embedding_hnsw` (a slow build on a large table) | No | Once a tenant has about 2,000 chunks the planner may choose it, and retrieval can return too few or wrong rows (ADR 0030) |
 | 0004 | `app_user` SELECT on `alembic_version` | No | `/ready` reports `schema` |
 | 0003 | RLS policies, definer functions and their grants | No | Tenant policies gone; RLS stays on, so with no policies every row is hidden (fail closed) |
 | 0002 | Table and column grants | No | App cannot read or write |
@@ -742,3 +743,32 @@ uv run pytest -m eval -s
 Expect `1 passed, ... deselected` and the tables on screen. The run rebuilds `grounded_answers_test` first, so do not run it at the same time as `pytest -m db`. Two runs on the same files give the same numbers (latency aside). A missing `TEST_EMBEDDING_MODEL_DIR` is a failure, not a skip.
 
 The plumbing (rankers as `app_user`, replaced versions invisible, the leak check, k rows) is covered in CI by `tests/db/test_retrieval_eval_smoke.py`, which uses a fake embedder.
+
+## Retrieval (ADR 0030)
+
+**Setting.** `RETRIEVAL_TOP_K` (default 5, range 1 to 20) is how many chunks `retrieve()` returns to the answer step. Set it in the environment of the web app. Step 7 compares 5 and 8.
+
+**Migration 0016 on the dev database.** The dev database is at `0015_queue_cleanup`. Run `alembic upgrade head` once (see "Migrations to head"). It drops the vector index `chunks_embedding_hnsw`, so retrieval is an exact search of the tenant's rows. The keyword index stays. `/ready` returns 503 `schema` until the migration has run, because the code expects `0016_drop_hnsw_index`.
+
+Check, as the admin role in psql:
+
+```sql
+SELECT indexname FROM pg_indexes WHERE schemaname = 'grounded' AND tablename = 'chunks' ORDER BY 1;
+```
+
+Expect `chunks_pkey` and `chunks_tsv_gin`, and no `chunks_embedding_hnsw`.
+
+**When to revisit the missing vector index.** Exact search costs more as one tenant's chunk count grows (measured, vector query alone, p50 / p95: 20 / 41 ms at 2,000 chunks, 45 / 79 ms at 5,000, 114 / 193 ms at 10,000, 188 / 369 ms at 20,000; `docs/EVAL.md`). Revisit (partitioning by tenant, or an index per tenant) when either holds:
+- retrieval p95 is above about 250 ms in the deployed system, or
+- one tenant has more than about 10,000 chunks. Count them as the admin role: `SELECT tenant_id, count(*) FROM grounded.chunks GROUP BY 1 ORDER BY 2 DESC LIMIT 5;`
+
+Do not add a plain HNSW index back. Once a tenant has about 2,000 chunks the planner chooses it, and it then returns fewer rows or the wrong nearest ones, because it filters after its scan (ADR 0030).
+
+**Reproduce the evidence** (outside CI, about 20 minutes, needs the model, same environment as "Retrieval evaluation"):
+
+```powershell
+$env:EVAL_REPORT_PATH = "$env:TEMP\retrieval-scale"     # a folder; optional, one JSON file per result
+uv run pytest -m eval -s -k scale
+```
+
+It builds 20 tenants with up to 28,000 chunks, prints one `GROWTH` line per tenant size and one `SETTINGS` line per pgvector setting, and puts the schema back afterwards. It rebuilds `grounded_answers_test`, so do not run it beside `pytest -m db`.

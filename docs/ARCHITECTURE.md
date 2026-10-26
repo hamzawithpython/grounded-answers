@@ -429,17 +429,32 @@ The worker reads a version's bytes (`ObjectStore`, ADR 0018) and extracts text i
 - Output is one structure for every format: `Extracted` with `Section`s (number, heading, level, page, text) and `Table`s. Section numbers set the level; font size sets it for unnumbered PDF headings.
 - Failures are one of four reasons: `timeout`, `memory`, `unreadable`, `no_text`. Nothing from the child's stderr or stdout reaches a log or a reason.
 
-## 6. Chunks and embeddings (ADR 0021, migration 0008)
+## 6. Chunks, embeddings and retrieval (ADR 0021, ADR 0030, migrations 0008 and 0016)
 
-One row per chunk of a document version, key `(tenant_id, version_id, position)`. Columns: `section_number`, `heading`, `clause_labels` (for citations such as 3.2.2), `body`, `embedding vector(384)`, `embedding_model` and `embedding_model_version` (pinned, ADR 0021 decision 6), and `tsv`, a generated `tsvector` over `body` with the English configuration. Indexes: HNSW on the embedding (cosine) and GIN on `tsv`.
+One row per chunk of a document version, key `(tenant_id, version_id, position)`. Columns: `section_number`, `heading`, `clause_labels` (for citations such as 3.2.2), `body`, `embedding vector(384)`, `embedding_model` and `embedding_model_version` (pinned, ADR 0021 decision 6), and `tsv`, a generated `tsvector` over `body` with the English configuration. Indexes: the primary key (tenant first) and GIN on `tsv`. **There is no vector index**: migration 0016 dropped HNSW (ADR 0030).
 
 Composite FK `(tenant_id, version_id)` to `document_versions`, `ON DELETE RESTRICT`. Chunks are purged before their version (section 5.5).
 
 **Row-level security is the retrieval rule (5.6).** `app_user` can SELECT a chunk only when its version is `ready`, is the document's `current_version_id`, and the document is not deleted. So a retrieval query needs no tenant or version filter of its own, and a retired, processing, failed or deleted version is invisible to it. `worker_user` reads, deletes and inserts chunks only for `processing` (and, for read and delete, `purging`) versions.
 
-**Retrieval candidates (Session 5, Step 1; decision in Step 2).** `grounded_answers.evaluation` runs three rankers as `app_user` and scores them on the owner's questions (`docs/EVAL.md`, "Retrieval evaluation against the database"): vector (cosine, pgvector), keyword (`tsvector` with the question's stemmed words joined by OR, `ts_rank_cd`) and hybrid (reciprocal rank fusion, k = 60). The strategy is not chosen yet.
+**Retrieval (`grounded_answers.retrieval`, ADR 0030).** `retrieve(session, question, query_vector, top_k=...)` runs inside the caller's tenant transaction as `app_user` and returns the top `RETRIEVAL_TOP_K` chunks (default 5) with the text, document title, version number, section, heading and clause labels.
 
-**Tie-break.** Equal scores are common for keyword search and for fusion. The rankers break ties by the md5 of the chunk body, then `(version_id, position)`. `version_id` is a random UUID, so on its own it makes two loads of the same files rank differently.
+```mermaid
+flowchart LR
+  Q[question] --> E[embed with the query: prefix, in a thread]
+  E --> V[vector: exact cosine over the tenant's rows]
+  Q --> K[keyword: stemmed words ORed, ts_rank_cd]
+  V --> F[reciprocal rank fusion, constant 60]
+  K --> F
+  F --> M[metadata: title, version, labels]
+  M --> R[top_k chunks]
+```
+
+- **Vector.** No index, so the planner narrows by the tenant-first primary key and sorts the tenant's rows by exact cosine distance. Correct at every size tested; the cost grows with the tenant's own chunk count (docs/EVAL.md). Revisit thresholds are in the RUNBOOK.
+- **Keyword.** English configuration; it cannot match Roman Urdu or Urdu script (ADR 0021). A question with no keyword match keeps the vector order, because fusion adds nothing from an empty list.
+- **Ties** are broken by the md5 of the chunk body, then `(version_id, position)`. `version_id` is a random UUID and on its own would make two loads of the same files rank differently.
+- **Query embedding in the web process (decided, built with `POST /ask`):** the model loads once in the app lifespan before the app is ready, each question is embedded with `asyncio.to_thread` bounded to about 4 at a time, and `/ready` fails until the model is loaded. Each process holds about 0.76 GB (peak 1.1 GB while loading), so run one worker per container.
+- **Known limit.** Table chunks carry only the section label (for example `6`), not the clause of the table's caption (`6.2`), so a citation of a table is section-level until ingestion is changed (PROGRESS, q012).
 
 ## 7. Row-Level Security summary
 
