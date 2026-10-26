@@ -7,7 +7,7 @@ The rules are enforced by grants and RLS, and each one is tested against the rea
 - worker_user reads and deletes chunks of 'processing' or 'purging' versions, and inserts only into
   'processing' versions. A retried ingestion deletes its partial chunks first, so one set remains.
 - Tenant isolation and fail-closed behaviour hold as on the other tenant tables.
-- The vector dimension is fixed at 384 and the HNSW index exists.
+- The vector dimension is fixed at 384; there is no vector index (ADR 0030).
 
 Setup rows are committed (other roles must see them), so each test removes the rows it created.
 """
@@ -333,11 +333,17 @@ def test_a_chunk_with_the_wrong_vector_dimension_is_refused(
                 )
 
 
-def test_the_hnsw_index_on_the_embedding_exists(admin: psycopg.Connection) -> None:
-    row = admin.execute(
-        "SELECT indexdef FROM pg_indexes WHERE schemaname = 'grounded' "
-        "AND indexname = 'chunks_embedding_hnsw'"
-    ).fetchone()
-    assert row is not None, "chunks_embedding_hnsw is missing"
-    assert "USING hnsw" in row[0]
-    assert "vector_cosine_ops" in row[0]
+def test_there_is_no_index_on_the_embedding_and_the_keyword_index_remains(
+    admin: psycopg.Connection,
+) -> None:
+    """Retrieval is an exact scan of the tenant's rows (ADR 0030, migration 0016). An approximate index that
+    filters after its scan returned too few or wrong rows once a tenant had a few thousand chunks."""
+    rows = admin.execute(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'grounded' AND tablename = 'chunks'"
+    ).fetchall()
+    definitions: dict[str, str] = dict(rows)
+    assert not [
+        name for name, d in definitions.items() if "USING hnsw" in d or "USING ivfflat" in d
+    ], "an approximate vector index exists on chunks"
+    assert "USING gin" in definitions["chunks_tsv_gin"]
+    assert "chunks_pkey" in definitions

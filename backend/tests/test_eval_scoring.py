@@ -13,15 +13,16 @@ from grounded_answers.evaluation.questions import (
     QuestionFileError,
     load_questions,
 )
-from grounded_answers.evaluation.rankers import RankedRow, fuse, vector_literal
 from grounded_answers.evaluation.scoring import (
     ScoredChunk,
     first_hit_rank,
     is_hit,
     metrics,
     percentile,
+    recall_and_mrr_at_k,
     separation,
 )
+from grounded_answers.retrieval.rankers import RankedRow, fuse, vector_literal
 
 QUESTIONS = (
     Path(__file__).resolve().parents[2] / "demo-data" / "indus-freight" / "eval-questions.json"
@@ -151,3 +152,25 @@ def test_fusion_ties_are_broken_by_the_text_key_before_the_random_ids() -> None:
 
 def test_vector_literal_is_pgvector_text() -> None:
     assert vector_literal([0.5, 1.0, -2.0]) == "[0.5,1.0,-2.0]"
+
+
+def test_mrr_at_k_counts_a_first_hit_below_k_as_zero() -> None:
+    # Ranks 1, 3, 6 and no hit. At k = 3 the rank-6 pair and the missing pair are outside.
+    recall, mrr = recall_and_mrr_at_k([1, 3, 6, None], k=3)
+    assert recall == pytest.approx(0.5)
+    assert mrr == pytest.approx((1 + 1 / 3) / 4)
+    recall, mrr = recall_and_mrr_at_k([1, 3, 6, None], k=10)
+    assert recall == pytest.approx(0.75)
+    assert mrr == pytest.approx((1 + 1 / 3 + 1 / 6) / 4)
+    assert recall_and_mrr_at_k([], k=5) == (0.0, 0.0)
+
+
+def test_a_larger_fusion_constant_flattens_the_difference_between_ranks() -> None:
+    version = uuid.UUID(int=1)
+    a, b = (RankedRow(version, n, (), 0.0) for n in (0, 1))
+    small = fuse([[a, b]], depth=10, constant=1)
+    large = fuse([[a, b]], depth=10, constant=100)
+    assert small[0].score == pytest.approx(1 / 2) and small[1].score == pytest.approx(1 / 3)
+    assert large[0].score == pytest.approx(1 / 101) and large[1].score == pytest.approx(1 / 102)
+    # The default is the standard 60.
+    assert fuse([[a]], depth=10)[0].score == pytest.approx(1 / 61)

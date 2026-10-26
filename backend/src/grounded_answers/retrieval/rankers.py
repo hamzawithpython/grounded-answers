@@ -1,21 +1,23 @@
 """
-The three candidate rankers of the retrieval evaluation (ADR 0021, decision 3). Each runs inside a tenant
-transaction as app_user, so row-level security and the current-version rule apply (ARCHITECTURE 5.6).
-No ranker filters by tenant or version itself: the policy on `chunks` does.
+The rankers behind retrieval (ADR 0030). Each runs inside a tenant transaction as app_user, so row-level security and
+the current-version rule apply (ARCHITECTURE 5.6). No ranker filters by tenant or version itself: the policy on
+`chunks` does.
 
 - vector: cosine distance between the query embedding and the chunk embedding (pgvector). The score is the cosine
-  similarity, 1 - distance. With a few hundred chunks the planner scans all rows, so the result is exact. The HNSW
-  index is not exercised here (Step 2 tests that at a larger size).
+  similarity, 1 - distance. There is no vector index (migration 0016), so the planner narrows by the tenant-first
+  primary key and sorts that tenant's rows by exact distance.
 - keyword: PostgreSQL full-text search over the stored tsvector (English configuration). The question's words
   are stemmed by the same configuration, then joined with OR, because a question has words that no single chunk
   contains. Ranked with ts_rank_cd. PostgreSQL has no inverse document frequency in its rank functions, so this is
-  not BM25 (docs/EVAL.md).
-- hybrid: reciprocal rank fusion of the two lists: score = sum over lists of 1 / (60 + rank).
+  not BM25 (docs/EVAL.md). The English configuration cannot match Roman Urdu or Urdu script (ADR 0021).
+- hybrid: reciprocal rank fusion of the two lists: score = sum over lists of 1 / (60 + rank). A chunk missing from a
+  list adds nothing from it, so a question with no keyword match keeps the vector order.
 
 Ties are common (ts_rank_cd gives coarse scores, and fusion makes equal sums). They are broken by the md5 of the
 chunk body, then (version_id, position). The md5 comes from the text, so it is the same on every load of the same
-documents; version_id is a random UUID and alone would make two loads of the same files rank differently. The question text is bound as a parameter,
-never joined into the SQL. Nothing here is logged.
+documents; version_id is a random UUID and alone would make two loads of the same files rank differently.
+
+The question text is bound as a parameter, never joined into the SQL. Nothing here is logged.
 """
 
 import uuid
@@ -102,14 +104,16 @@ async def keyword_rank(session: AsyncSession, question: str, depth: int) -> list
     return _rows(result.all())
 
 
-def fuse(lists: Sequence[Sequence[RankedRow]], depth: int) -> list[RankedRow]:
+def fuse(
+    lists: Sequence[Sequence[RankedRow]], depth: int, constant: int = RRF_K
+) -> list[RankedRow]:
     """Reciprocal rank fusion. A chunk missing from a list adds nothing from that list."""
     scores: dict[tuple[uuid.UUID, int], float] = defaultdict(float)
     rows: dict[tuple[uuid.UUID, int], RankedRow] = {}
     for ranked in lists:
         for rank, row in enumerate(ranked, start=1):
             key = (row.version_id, row.position)
-            scores[key] += 1.0 / (RRF_K + rank)
+            scores[key] += 1.0 / (constant + rank)
             rows[key] = row
     ordered = sorted(scores, key=lambda key: (-scores[key], rows[key].tie_key, str(key[0]), key[1]))
     return [
