@@ -2,6 +2,7 @@
 
 > Status: DRAFT — owner: Hamza Asif. Every change to this file is recorded in CHANGELOG.md.
 > Decisions that change scope get an ADR in `docs/adr/`.
+> Scope amended 2026-10-26 (approved): v1 is the demoable core; conversation context, feedback and review queue, analytics, user-management and audit UI, and eval-in-CI move to v1.1; Telegram moves to v2; "time to first token" becomes "time to first visible state".
 
 ## 1. Problem
 
@@ -35,15 +36,14 @@ the answer, and gives admins **evaluation and usage dashboards** to prove it wor
 | Role | Who | Can do |
 |---|---|---|
 | Platform owner | Hamza (operator) | Create tenants and run evals for any tenant **via an admin CLI only** (uses the migration role; no web access to tenant data). View system health (`/ready`, no tenant data). See ADR 0004. |
-| Tenant admin | HR / Ops head | Upload/replace/delete documents, manage users, view analytics and eval results, review flagged answers |
-| Employee | Staff member | Ask questions via web chat or Telegram, view citations, give feedback (helpful / not helpful) |
+| Tenant admin | HR / Ops head | v1: upload/replace/delete documents and see their ingestion status. v1.1: manage users, view analytics and eval results, review flagged answers (until then the platform owner creates users with the admin CLI) |
+| Employee | Staff member | v1: ask questions via web chat and view citations. v1.1: give feedback (helpful / not helpful). Telegram is v2 |
 
 ## 5. Channels (v1)
 
 1. **Web chat** (Next.js) — employees log in and chat; citations open the source passage.
-2. **Telegram bot** — employees link their Telegram account to their company account once, then ask
-   questions in the bot. Same answer engine, same permissions, same logging.
-3. **Admin panel** (Next.js) — documents, users, analytics, evaluation dashboard.
+2. **Admin panel** (Next.js) — v1: documents (upload, replace, delete, status). v1.1: users, analytics, evaluation dashboard, review queue.
+3. **Telegram bot** — v2 (moved out of v1, 2026-10-26). Employees would link their Telegram account to their company account once, then ask questions in the bot, with the same answer engine, permissions and logging.
 
 No WhatsApp. No phone/voice in v1.
 
@@ -65,20 +65,20 @@ No WhatsApp. No phone/voice in v1.
 - Answer generated **only** from retrieved passages, returned as structured output:
   answer text, citations (document, section or clause, quoted span), and a refusal flag with a reason code. (Amended 2026-10-26, ADR 0032: no model-reported confidence field; it is not calibrated. Citations are checked against the sources before an answer is shown.)
 - If evidence is weak or missing → polite refusal + suggestion to contact HR (no guessing).
-- Conversation context within a session (follow-up questions work).
+- Conversation context within a session (follow-up questions work). **v1.1** (moved out of v1, 2026-10-26; in v1 each question stands alone).
 
-### 6.3 Feedback & review
+### 6.3 Feedback & review (v1.1)
 - Employees can mark answers helpful / not helpful with an optional comment.
 - Admins see a review queue of refused and down-voted answers, and of answers that needed a retry or failed validation (replaces "low-confidence", ADR 0032).
 
-### 6.4 Analytics
+### 6.4 Analytics (v1.1)
 - Questions per day, top topics, refusal rate, helpfulness rate, median response time, cost per answer.
 
 ### 6.5 Evaluation (built-in, not optional)
 - A versioned evaluation set per tenant: question, expected answer, expected source(s), and
   "unanswerable" questions.
-- Eval runs on demand (admin panel) and automatically in CI on every change to retrieval/prompt code.
-- Results stored and charted over time.
+- v1: eval runs on demand (operator, admin CLI) and results are stored.
+- v1.1: eval runs from the admin panel and automatically in CI on every change to retrieval/prompt code; results charted over time.
 
 ## 7. Non-functional requirements
 
@@ -104,7 +104,7 @@ No WhatsApp. No phone/voice in v1.
 ### 7.3 Performance & cost targets
 | Metric | Target |
 |---|---|
-| p95 time to first token (web) | ≤ 3 s |
+| p95 time to first visible state (web: a progress state, e.g. "searching documents"; answer text appears only after validation, ADR 0032) | ≤ 3 s |
 | p95 full answer time | ≤ 8 s |
 | LLM cost per answer | tracked; target ≤ $0.002 on free/cheap models |
 
@@ -123,6 +123,10 @@ No WhatsApp. No phone/voice in v1.
 - SSO (Google/Microsoft login) — planned for v2.
 - Billing/subscriptions.
 - Urdu answers (v2 — after English evals pass).
+- Telegram channel (v2, moved 2026-10-26).
+
+### Planned for v1.1 (after the demoable v1)
+Conversation context for follow-ups (6.2); feedback and the review queue (6.3); analytics (6.4); tenant-admin user management and audit-log view (§4); evaluation from the admin panel, in CI, and charted (6.5).
 
 ## 9. Success criteria (portfolio + sales)
 - Live demo URL with the demo tenant and a public "try it" account.

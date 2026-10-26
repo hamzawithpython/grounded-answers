@@ -40,109 +40,79 @@ Plan approved 2026-10-26. Each step has its own branch and PR, and stops for rev
 
 **Known evidence limits (ADR 0030):** 45 pairs, so one pair is 0.022; the hybrid lead over vector is a hypothesis, and the old scratch figure of 0.76 is unexplained; 180 vs 190 chunks against the scratch set is unexplained; the scale data is synthetic copies of the real chunks.
 
-## Session 6+ outline (PROPOSED 2026-10-26, awaiting review; nothing here is decided)
+## Session 6+ outline (revised 2026-10-26 after review; the order and the SPEC scope changes are approved, each session's decisions are still to be made one by one)
 
-Covers what SPEC §5–10 needs and no session covered yet. Session 5 (Steps 5 to 7) is unchanged. Every "decision" below is an ADR you make one by one; every provider or price fact is to be checked online on the day (CLAUDE.md), none is assumed here. Order is a recommendation; the first decision is whether Session 6 goes before Step 5.
+Goal: ship a **demoable v1** first. Order: Session 5 finish (Steps 5 to 7), then Sessions 6 to 9. Everything else is in "v1.1" and "v2" below. The SPEC was amended the same day with your approval (see the note at the top of `docs/SPEC.md`): conversation context, feedback and review queue, analytics, user-management and audit UI, and eval-in-CI move to v1.1; Telegram moves to v2; "time to first token" becomes "time to first visible state" (progress states; answer text is shown only after validation, ADR 0032). Every provider, price or limit fact is checked online on the day (CLAUDE.md); none is assumed here.
 
-**Gaps found in SPEC that the first request did not list** (each needs a home or a SPEC change you approve): conversation context for follow-ups (6.2); feedback and the review queue (6.3); analytics (6.4); evaluation runs on demand and in CI, with results charted (6.5); user management and the audit-log view (§4, 7.1); per-tenant rate limit (7.1); LLM tracing and error tracking (7.4); the second tenant for isolation tests (§3); the Telegram channel (§5). They are placed in Sessions 7, 9, 11 and 13 below.
+**What v1 means.** An employee logs in and asks a question, gets a cited answer or a fixed refusal, and opens a citation to read the source passage. A tenant admin uploads, replaces and deletes documents and sees their status. The operator creates tenants and users with the admin CLI and runs the evaluation on demand with the CLI. Each question stands alone (no history). It runs on a real host, restarts itself, reports errors, has a public try-it account with a daily cap and a reset, and has a portfolio write-up.
 
-### Session 6 - Hosting feasibility and decision (research and a throwaway trial; recommended BEFORE Step 5)
+**Consequences of the cut for Step 5.** No conversation or feedback tables. The metering table (tokens, cost, latency, outcome code, retry flag, per tenant, with RLS, grants and the catalog guard) still comes with `/ask` for the cost cap. Decision for the Step 5 plan: store question and answer text at all, or counts and codes only (recommended in v1: counts and codes only, which also satisfies SPEC 7.1 data minimisation and removes a retention setting).
 
-**Goal.** Find out early whether a managed Postgres can run our bootstrap, because that can force the provider, and the provider fixes the pooler, memory and connection budget that Step 5 (`/ask`, two model-holding processes) is sized for.
+### Session 5 (finish): Steps 5 to 7 (see the table above)
+`POST /ask`, prompt-injection tests, answer evaluation. Unchanged. Step 5 is designed for about 1.1 GB per web and per worker process and a pooler-agnostic connection use; if Session 6 finds a different host constraint, the rework is recorded then.
+
+### Session 6 - Hosting feasibility and decision (research and a throwaway trial)
+
+**Goal.** Find out whether a managed Postgres can run our bootstrap, because that can force the provider, and the provider fixes the pooler, memory and connection budget.
 
 **Steps.**
-1. For each shortlisted host (about 4: one managed Postgres with a separate app host, one all-in-one platform, one VPS with our own `docker-compose` Postgres, one with a free tier), record from the official pages, with the date: RAM per instance and price (need at least 1.1 GB per web and per worker process, so about 2.2 GB plus Postgres if on one box), Postgres version, extension list, pooler offering, backups and retention, region, data-processing terms, free-tier limits.
-2. Check the bootstrap needs one by one against the host's documentation, then on a real trial instance: `CREATE ROLE ... LOGIN` and `NOLOGIN` with `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`; setting a SCRAM-SHA-256 verifier as the password (`bootstrap_cluster.sql`); schemas `AUTHORIZATION migration_role`; objects and `SECURITY DEFINER` functions owned by the NOLOGIN definer roles (needs the right to hand ownership and `SET ROLE`); `CREATE SCHEMA extensions` and `CREATE EXTENSION vector SCHEMA extensions` (non-default schema, allowed version); `FORCE ROW LEVEL SECURITY`; the exact-grant tests; and whether the managed superuser-like role (not a real superuser) can run all of `bootstrap_cluster.sql`, `bootstrap_definer_roles.sql` and `bootstrap_database.sql`.
-3. Check the pooler: transaction mode versus our prepared-statement setting (ADR 0005), `LISTEN/NOTIFY` for the queue (ADR 0015 decision 6), and the connection budget (web max + worker pool + worker LISTEN + migration and operator).
-4. Run the migrations and the `db` tests against the trial instance (a throwaway database, fictional data, no secrets in the repo). Record every result in SECURITY.md (hosting checklists in RUNBOOK, ADR 0018 and ADR 0021).
+1. Shortlist about 4 hosts (managed Postgres plus a separate app host, an all-in-one platform, a VPS with our own `docker-compose` Postgres, a free tier). From the official pages, with the date: RAM and price per instance (at least 1.1 GB per web and per worker process, so about 2.2 GB plus Postgres on one box), Postgres version, extension list, pooler, backups and retention, region, data-processing terms, free-tier limits.
+2. Check each bootstrap need, first in the documentation, then on a real trial instance: `CREATE ROLE` as `LOGIN` and `NOLOGIN` with `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`; setting a SCRAM-SHA-256 verifier as a password (`bootstrap_cluster.sql`); schemas `AUTHORIZATION migration_role`; objects and `SECURITY DEFINER` functions owned by the NOLOGIN definer roles (ownership transfer and `SET ROLE`); `CREATE SCHEMA extensions` and `CREATE EXTENSION vector SCHEMA extensions`; `FORCE ROW LEVEL SECURITY`; the exact-grant tests; whether the provider's admin role can run all three bootstrap files.
+3. Check the pooler: transaction mode against our prepared-statement setting (ADR 0005), `LISTEN/NOTIFY` for the queue (ADR 0015 decision 6), and the connection budget (web max + worker pool + worker LISTEN + migration and operator).
+4. Run the migrations and `pytest -m db` against the trial instance (throwaway database, fictional data, no secrets in the repo). Record every result in SECURITY.md (hosting checklists in RUNBOOK, ADR 0018 and ADR 0021).
 
-**Decisions.** (a) Managed Postgres, or self-managed Postgres on a VPS if the bootstrap does not fit (the fallback that removes every constraint, at the cost of running backups and upgrades yourself). (b) Where the web app and the worker run, and whether the frontend shares a registrable domain with the API (the refresh cookie and CORS in Session 8 depend on it). (c) Whether to pay: any paid service needs an ADR with price and alternative (SPEC 7.5).
+**Decisions.** (a) Managed Postgres, or self-managed Postgres on a VPS if the bootstrap does not fit (the fallback that removes every constraint, at the cost of running backups and upgrades yourself). (b) Where web and worker run, and whether the frontend shares a registrable domain with the API (the refresh cookie, CORS and CSRF in Session 7 depend on it). (c) Any paid service needs an ADR with price and alternative (SPEC 7.5).
 
-**Verified by.** A written checklist with a pass or fail per bootstrap statement, the trial instance output pasted into the ADR (numbers and statements, no secrets), and `pytest -m db` green against the trial instance. If nothing passes, the ADR says so and picks the VPS.
+**Verified by.** A pass or fail per bootstrap statement, trial output (statements and numbers, no secrets) in the ADR, and `pytest -m db` green against the trial instance. If nothing passes, the ADR says so and picks the VPS.
 
-### Session 7 - Product API gaps and evaluation in CI
+### Session 7 - Frontend: login, chat, admin documents (accessibility and security headers built in)
 
-**Goal.** Finish the backend that the screens need, before any screen is built.
+**Goal.** The v1 screens, accessible and safe by construction, not as a later pass. May be split into 7a (login and chat) and 7b (admin documents) when planned.
 
-**Steps.** Conversation context so follow-ups work (stored per user, tenant-scoped, RLS, retention; how much history goes into the prompt, and the prompt-privacy rule from ADR 0031 still holds); feedback endpoints (helpful or not, optional comment) and the review queue (refused, down-voted, retried, `could_not_verify`, from ADR 0032); user management endpoints for the tenant admin (create, role change, deactivate; today users come from the admin CLI); audit-log read endpoint; analytics queries (questions per day, top topics, refusal rate, helpfulness, median time, cost per answer) from the metering table of Step 5; per-tenant rate limit; eval runs on demand (admin) with stored results; the eval job in CI.
+**Steps.**
+- Login with the access token in memory only and the refresh token in an httpOnly cookie (ADR 0012, 0013); silent refresh on load and on 401 with one refresh in flight; logout; route guards.
+- Chat: a progress state while the answer is produced, then the validated answer; clickable citations that open the source passage (document, clause, quoted span); the fixed refusal messages by reason code; the "could not verify" and service-unavailable states. Model text is rendered as plain text, never HTML, and no model-controlled links.
+- Admin documents page: upload with type and size feedback, status (queued, processing, ready, failed with reason), replace, delete with the retention explanation. The API stays the authority; the UI hides what the API refuses.
+- Accessibility from the first component: keyboard use, focus management, labels, contrast, screen-reader names for citations and status changes, reduced motion.
+- Security headers from the first deploy: CSP without `unsafe-inline` (nonces or hashes), `frame-ancestors`, `Referrer-Policy`, `Permissions-Policy`, `X-Content-Type-Options`; HSTS at the host.
+- Frontend dependency and licence review by exact name (as for the backend).
 
-**Decisions.** How eval runs in CI without leaking data or burning free quota (a small subset per PR with a fake or recorded provider, the full set nightly or on demand, fictional data only); topic grouping method for "top topics" (simple keyword or document-level counts first, no extra model); history length; retention of questions and answers (SPEC 7.1 says minimise personal data in logs; stored chat is data, so it needs a retention setting like documents).
+**Decisions.** Call the API directly or through a Next.js server layer (cookies, CORS, CSRF); CSRF protection on the cookie-based refresh and logout (SameSite value, a custom header, or both); polling interval for ingestion status; CSP strictness against the framework's inline needs; accessibility level to claim (WCAG 2.2 AA is the usual target); component and chart-free styling within the existing Tailwind setup.
 
-**Verified by.** Tests per endpoint including cross-tenant tests for every new table (RLS, exact grants, the catalog guard), the same quality gates, and the eval job passing in CI on a deliberately worsened retrieval change (it must fail).
+**Verified by.** Vitest and Testing Library tests for the auth flow (expired access token, rotated refresh, reuse detection showing logged-out); a Playwright run against a local stack (login, ask, open citation, refusal, admin upload and delete, logout); axe checks with zero serious findings; a CSP test that fails when an inline script appears and a header test; an employee-versus-admin access test on every admin route and endpoint; lint and typecheck in CI; a written manual keyboard and screen-reader pass in SECURITY.md.
 
-### Session 8 - Frontend foundation: login and chat
-
-**Goal.** An employee can log in and ask a question and see cited, checkable answers.
-
-**Steps.** Next.js app structure and API client; login with the access token held in memory only and the refresh token in an httpOnly cookie (ADR 0012 and 0013); silent refresh on load and on 401, one in-flight refresh at a time; logout; route guards; chat screen with streaming or whole-answer display, clickable citations that open the source passage (document, clause, quoted span), the fixed refusal messages by reason code, a visible "could not verify" state, and the service-unavailable message; feedback buttons.
-
-**Decisions.** Call the API directly or through a Next.js server layer (affects cookies, CORS and CSRF); CSRF protection on the cookie-based refresh and logout calls (SameSite value, a custom header, or both); streaming or not (the contract validates the full answer before it may be shown, so streaming would show unchecked text; the likely answer is no streaming of answer text in v1, only a progress state, and a SPEC 7.3 "time to first token" target restated as "time to first visible state"; that SPEC change needs your approval); component and styling choices within the existing Tailwind setup.
-
-**Verified by.** Vitest and Testing Library tests for the auth flow (expired access token, rotated refresh, reuse detection showing logged-out), a Playwright end-to-end run against a local stack (login, ask, open citation, refusal, logout), lint and typecheck in CI.
-
-### Session 9 - Admin panel
-
-**Goal.** A tenant admin runs the tenant without the operator.
-
-**Steps.** Document management (upload with type and size feedback, status queued, processing, ready, failed with reason, replace, delete with the retention explanation); user management; review queue; analytics charts; evaluation dashboard and "run now"; audit-log view.
-
-**Decisions.** Upload progress and polling versus server-sent events for status; chart library (license and size, checked by exact name); admin-only routes and how the UI hides what the API already refuses (the API stays the authority).
-
-**Verified by.** Playwright admin flows, an admin versus employee access test on every admin route and endpoint, and a manual check against the real worker.
-
-### Session 10 - Frontend hardening
-
-**Goal.** Accessibility and browser security, proven rather than claimed.
-
-**Steps.** Keyboard-only use, focus management, labels, contrast, screen-reader names for citations and status changes, reduced motion; security headers (CSP without `unsafe-inline` using nonces or hashes, `frame-ancestors`, `Referrer-Policy`, `Permissions-Policy`, HSTS at the host, `X-Content-Type-Options`); rendering of model text as plain text (no HTML from answers, no model-controlled links); dependency and licence review of the frontend by exact name (as for the backend).
-
-**Decisions.** CSP strictness against the framework's inline needs; which accessibility level to claim (WCAG 2.2 AA is the usual target); which checker (axe in tests plus a manual keyboard pass).
-
-**Verified by.** axe checks in the Playwright run with zero serious findings, a CSP test that fails when an inline script appears, a header test against the running app, and a written manual keyboard and screen-reader pass in SECURITY.md.
-
-### Session 11 - Deployment and observability
+### Session 8 - Deployment and observability
 
 **Goal.** The system runs on the chosen host, restarts itself, and tells you when it is unhealthy.
 
-**Steps.** Images for web and worker (embedding model files baked in at build, never downloaded at start, ADR 0022); secrets in the host's secret store, key rotation steps in the RUNBOOK; HTTPS and redirects; migrations as a release step with a rollback note; backups and the restore rule for purged documents (ADR 0007, RUNBOOK restore section: after a restore, re-run the purge so deleted documents do not return), with a restore drill; worker restart policy together with the deferred bounded-reconnect change (PROGRESS, Session 4 "Change 2"), tested with a real database restart; structured logs with no document or question text; metrics and alerts: `/ready` failing, failed-job count, queue age, cost cap hit, provider 429 or 5xx rate, p95 latency, disk and storage growth (ADR 0018); error tracking with scrubbing of request bodies; LLM tracing that records ids, token counts and codes only (the same rule as the eval report); uptime check.
+**Steps.** Images for web and worker (model files baked in at build, never downloaded at start, ADR 0022); secrets in the host's secret store, with key rotation steps in the RUNBOOK; HTTPS and redirects; migrations as a release step with a rollback note; backups and the restore rule for purged documents (ADR 0007 and the RUNBOOK restore section: after a restore, re-run the purge so deleted documents do not return), with a restore drill; **worker restart policy together with the deferred bounded-reconnect change** (PROGRESS, Session 4 "Change 2"), tested with a real database restart; structured logs with no document or question text; **error tracking** with request bodies scrubbed; LLM tracing that records ids, token counts and codes only; alerts for `/ready` failing, failed-job count, queue age, cost cap reached, provider 429 or 5xx rate, p95 latency, storage growth (ADR 0018); an uptime check.
 
-**Decisions.** Observability stack within free tiers (what each retains and where it processes data); log retention period (SPEC 7.1); alert channel (Telegram or email); whether to run one worker container per host or share a box (memory, section 6).
+**Decisions.** Observability stack within free tiers (what each retains and where it processes data); log retention period (SPEC 7.1); alert channel; one worker per host or sharing a box (memory).
 
-**Verified by.** A deploy from a clean checkout following only the RUNBOOK; a kill-the-worker and a database-restart drill with the system recovering; a restore drill into a scratch database; an induced alert for each alert rule; the secret scan on the deployed image and repo.
+**Verified by.** A deploy from a clean checkout following only the RUNBOOK; a kill-the-worker drill and a database-restart drill with recovery; a restore drill into a scratch database; an induced alert for each alert rule; a secret scan of the repo history and the image.
 
-### Session 12 - Public demo: the try-it account
+### Session 9 - Public demo and portfolio
 
-**Goal.** Anyone can try the product without hurting it, the budget, or the data.
+**Goal.** Anyone can try the product without hurting it, the budget, or the data; and the proof is published.
 
-**Risks to design for.** Cost and quota drain: the Groq free tier is about 200,000 tokens a day and one answer is about 1,900 tokens, so roughly 100 answers a day for everyone together; one visitor can use it all. Prompt-injection and abuse text through the question box and through the demo documents; scraping of the document set; account sharing and credential posting; uploads of hostile files if the demo account can upload; stored chat from visitors becoming public data; the demo tenant being altered by visitors; a provider outage showing as a broken site.
+**Demo risks to design for.** Quota drain: the Groq free tier is about 200,000 tokens a day and one answer is about 1,900 tokens, so roughly 100 answers a day for everyone together, and one visitor can use it all. Prompt-injection and abuse text through the question box; scraping of the document set; posted credentials and account sharing; uploads of hostile files; the demo tenant being altered; a provider outage showing as a broken site.
 
-**Steps.** A demo user that is employee-only (no upload, no delete, no user management) plus an optional separate admin tour using a read-only or pre-rendered view; per-account, per-IP and global daily caps with a clear "demo budget used today, back tomorrow" message (from the cost cap built in Step 5); question length limit; lower rate limits for the demo tenant; a second provider as fallback (Gemini free tier, fictional data only); the demo tenant reset job (restore the seeded documents and eval set, delete visitor questions, feedback and sessions, rotate nothing secret) running on a schedule through a narrowly granted definer, idempotent and audited; a banner that the data is fictional and that questions are stored for a short time.
+**Steps.** An employee-only demo user (no upload, delete or write beyond asking); a read-only or screenshot tour for the admin page; per-account, per-IP and **global daily caps** with a clear "demo budget used today, back tomorrow" message (on top of the Step 5 per-tenant cost cap); question length limit; lower rate limits for the demo tenant; a second provider as fallback (Gemini free tier, fictional data only); the **demo tenant reset job** (restore seeded documents, clear any visitor-created rows, idempotent, audited, through a narrowly granted definer) on a schedule; a banner that the data is fictional.
+Portfolio: final evaluation run on the deployed system with results in `docs/EVAL.md` against SPEC 7.2 (recall@5 0.85, groundedness 0.90, citation accuracy 0.90, correct refusal 0.90) and 7.3 (latency, cost); the second fictional tenant added to the isolation tests (SPEC §3); security write-up from SECURITY.md (threat model, controls, cross-tenant test results, dependency review, the `httpx2` near-miss); README with quick start and architecture diagram; 60-second demo video; case study.
 
-**Decisions.** Credentials shown publicly or an email-gated sign-up; the caps and their numbers; reset frequency (nightly, or after every N sessions); whether the demo may upload at all; what is stored from demo visitors and for how long.
+**Decisions.** Public credentials or email-gated sign-up; the cap numbers; reset frequency; what to publish of the evaluation set and of failures (recommended: publish the failures too); repository licence; whether to seek one real pilot user (stretch).
 
-**Verified by.** Tests for each cap (user, IP, global) and for the over-budget message; a test that the demo user is refused every write the admin may make; a reset test that restores a visitor-modified tenant to the seeded state and leaves other tenants untouched; a load test of the caps; a staged outage of the primary provider showing the fallback or the unavailable message.
+**Verified by.** Tests for each cap (user, IP, global) and the over-budget message; a test that the demo user is refused every write the admin may make; a reset test that restores a visitor-modified tenant and leaves other tenants untouched; a staged primary-provider outage that shows the fallback or the unavailable message; every number in the README and case study traceable to a committed report; a fresh-clone run of the README quick start; a final secret scan of the full history.
 
-### Session 13 - Telegram channel (SPEC §5.2; confirm it stays in v1)
+### v1.1 (after the demoable v1 ships; scope change approved 2026-10-26)
 
-**Goal.** Same answer engine, permissions and logging through a Telegram bot.
+Conversation context for follow-ups (stored per user, tenant-scoped, RLS, with a retention setting; history length; the prompt-privacy rule still holds); feedback (helpful or not, optional comment) and the review queue (refused, down-voted, retried, `could_not_verify`, ADR 0032); analytics (questions per day, top topics, refusal rate, helpfulness, median time, cost per answer); tenant-admin user management and the audit-log view; evaluation from the admin panel and charted, and the eval job in CI (small subset per PR with a fake or recorded provider, full set nightly or on demand, fictional data only). Each gets its own plan, ADR where a decision is involved, and cross-tenant tests for every new table.
 
-**Steps.** One-time account linking (a short-lived code shown in the web app, not a shared secret in chat); webhook with signature check; the same `/ask` path and caps; citations as text; rate limits per linked user; unlink.
+### v2 (approved 2026-10-26)
 
-**Decisions.** Keep or move Telegram to v2 (a SPEC change needs your approval; it is a real attack surface and a real cost in time); webhook versus polling on the chosen host.
+Telegram channel (one-time account linking with a short-lived code, signed webhook, same `/ask` path and caps); SSO; Urdu answers (after English evals pass).
 
-**Verified by.** Tests that an unlinked Telegram user gets nothing, that a linked user sees only their tenant, that a forged webhook is rejected, and that answers match the web path.
-
-### Session 14 - Portfolio
-
-**Goal.** What a reviewer or a client sees: proof, not claims.
-
-**Steps.** Final evaluation run on the deployed system with results in `docs/EVAL.md` against the SPEC 7.2 targets (recall@5 0.85, groundedness 0.90, citation accuracy 0.90, correct refusal 0.90) and 7.3 (latency, cost); the second fictional tenant added to the isolation tests (§3); security write-up from SECURITY.md (threat model, controls, the cross-tenant test results, the dependency review, the near-miss `httpx2` story); README with a quick start and the architecture diagram; 60-second demo video script and recording; case study.
-
-**Decisions.** What to publish of the evaluation set and of failures (recommended: publish the failures too); licence for the repository; whether to seek one real pilot user (stretch).
-
-**Verified by.** Every number in the README and case study traceable to a committed report; a fresh-clone run of the README quick start; a link check; a final secret scan of the full history.
-
-**Open question to answer first:** run Session 6 before Step 5 (recommended, because the host choice sets memory and pooler constraints that `/ask` inherits), or after Step 7.
+**Open question for review:** none that blocks Step 5. Assumption to confirm: in v1 the on-demand evaluation is run by the operator with the CLI, and the admin-panel button waits for v1.1.
 
 ## Session 3 complete (2026-10-22)
 
