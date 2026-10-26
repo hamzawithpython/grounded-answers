@@ -4,6 +4,8 @@ again before relying on a figure. A free tier costs nothing: this is what the sa
 so the SPEC target (at most $0.002 per answer) can be checked while testing on free tiers.
 """
 
+import math
+from decimal import Decimal
 from typing import Final
 
 from grounded_answers.answering.types import Usage
@@ -27,3 +29,20 @@ def list_price_usd(model: str, usage: Usage) -> float:
     except KeyError:
         raise UnknownModelPrice(model) from None
     return (usage.input_tokens * input_price + usage.output_tokens * output_price) / 1_000_000
+
+
+def cost_micro_usd(model: str, usage: Usage) -> int:
+    """
+    The list-price cost of the tokens in whole millionths of a dollar, rounded up (ADR 0033, decision 3).
+
+    A price in dollars per million tokens is the same number as micro-dollars per token, so no scaling is needed.
+    Decimal arithmetic, and rounding up, so the daily cap never counts less than the list price.
+    """
+    try:
+        input_price, output_price = LIST_PRICES[model]
+    except KeyError:
+        raise UnknownModelPrice(model) from None
+    micro = Decimal(usage.input_tokens) * Decimal(str(input_price)) + Decimal(
+        usage.output_tokens
+    ) * Decimal(str(output_price))
+    return math.ceil(micro)

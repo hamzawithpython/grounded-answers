@@ -35,6 +35,8 @@ from grounded_answers.upload.body_limit import UploadBodyLimit
 from grounded_answers.upload.limits import MAX_BODY_BYTES
 from grounded_answers.upload.rate import UploadLimiter
 
+VALKEY_SOCKET_TIMEOUT_SECONDS = 0.5
+
 
 async def _load_auth_state(app: FastAPI, settings: Settings, cache: Redis) -> None:
     """
@@ -119,7 +121,13 @@ def _make_lifespan(
         app.state.session_factory = create_session_factory(engine)
         app.state.object_store = PostgresObjectStore()
         app.state.job_app = build_app(conninfo_from_sqlalchemy_url(str(settings.database_url)))
-        cache = Redis.from_url(str(settings.redis_url))
+        # Short socket timeouts (ADR 0033, decision 3): a slow Valkey must fail the limiters closed, not hang a request.
+        # The client is shared, so login and upload limits also answer 503 when Valkey is slow (intended).
+        cache = Redis.from_url(
+            str(settings.redis_url),
+            socket_timeout=VALKEY_SOCKET_TIMEOUT_SECONDS,
+            socket_connect_timeout=VALKEY_SOCKET_TIMEOUT_SECONDS,
+        )
         checks: dict[str, CheckFn] = {
             "database": make_database_check(engine),
             "cache": make_cache_check(cache),

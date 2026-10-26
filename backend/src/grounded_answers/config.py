@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # How many questions are embedded at the same time (ADR 0033, decision 7). Each takes two CPU threads.
     embed_concurrency: int = Field(default=2, ge=1, le=4)
 
+    # POST /ask limits (ADR 0033, decisions 3 and 6). Per minute, counted per attempt; the in-flight limit is how many
+    # questions of one tenant may be in progress at once; the deadline is the whole request budget in seconds.
+    ask_rate_user_per_min: int = Field(default=5, ge=1, le=1000)
+    ask_rate_tenant_per_min: int = Field(default=20, ge=1, le=10000)
+    ask_inflight_per_tenant: int = Field(default=2, ge=1, le=20)
+    ask_deadline_seconds: float = Field(default=12.0, ge=5.0, le=30.0)
+
     # Answer-model API keys (ADR 0031). Read from backend/.env only, held as SecretStr so they never print.
     # Groq and Gemini free tiers take fictional data only. A real client's key is their own paid, no-training key.
     groq_api_key: SecretStr | None = None
