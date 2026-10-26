@@ -31,7 +31,14 @@ from grounded_answers.config import get_settings
 from grounded_answers.main import create_app
 from tests.answering_support import answer_json, result_of
 from tests.db.auth_support import SELECTOR, Accounts, flush_test_valkey
-from tests.db.chunk_support import ChunkSpec, VersionSpec, as_floats, axis_vector, insert_document
+from tests.db.chunk_support import (
+    ChunkSpec,
+    VersionSpec,
+    as_floats,
+    axis_vector,
+    insert_document,
+    remove_tenant,
+)
 from tests.db.database import DbHandle
 from tests.db.eval_support import EvalTenant, fresh_tenant
 
@@ -92,6 +99,9 @@ class AskWorld:
     document_id: uuid.UUID
     model: FakeAnswerModel
     emails: dict[str, str] = field(default_factory=dict)
+    created: list[EvalTenant] = field(
+        default_factory=list
+    )  # every tenant this test made, removed at the end
 
     def post(
         self, question: str = "How many days of notice?", *, token: str | None = None, **json: Any
@@ -152,6 +162,7 @@ class AskWorld:
         """Another tenant with its own settings, document and an employee token."""
         with psycopg.connect(self.handle.admin_test_url()) as conn:
             other = fresh_tenant(conn)
+            self.created.append(other)
             if with_document:
                 _insert_handbook(conn, other, body)
         self.set_settings(tenant=other.tenant)
@@ -246,5 +257,13 @@ def ask_world(accounts: Accounts, monkeypatch: MonkeyPatch, tmp_path: Path) -> I
             model,
         )
         world.set_settings()
-        yield world
+        world.created.append(tenant)
+        try:
+            yield world
+        finally:
+            # The rows were committed, so they stay in the shared test database. Tests that look at the whole database
+            # as the cluster admin (the retrieval negative control) must not meet them.
+            with psycopg.connect(accounts.handle.admin_test_url()) as conn:
+                for made_tenant in world.created:
+                    remove_tenant(conn, made_tenant)
     get_settings.cache_clear()

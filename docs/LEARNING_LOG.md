@@ -864,3 +864,9 @@ The limits are tested with a limiter built in the test. That would pass even if 
 
 ### Measure what happened before saying it
 In the first draft of the dependency note I wrote that a package was a near-miss of another. Checking again, for an unrelated reason, showed that the framework itself recommends it and that its maintainers are the same people. The earlier caution was reasonable at the time, but the wording was too strong. The fix is to say what was checked and when, and to correct the record when new evidence arrives.
+
+### Tests that commit rows must remove them, and run them in the same order CI does
+CI failed on one old test after the `/ask` tests were added. That test runs as the database administrator, which sees every tenant's rows, and it expects a database with no one else's chunks. My new tests had committed chunks for their own tenants and left them behind. On my machine the suite ran in three chunks, each on a fresh database, so the leftovers never met the test; CI runs everything in one go, and they did. The fix is a shared cleanup used by every test that commits tenant data. The lesson is two rules: a test that commits shared data cleans up after itself, and before pushing, run the suite the way CI runs it (one invocation), not in pieces that hide contamination.
+
+**Q: Why did the chunked local runs pass when CI failed?**
+A: Each chunk rebuilt the database, so data left by one test could not reach a test in another chunk. The failure needed the leftover data and the sensitive test in the same run.

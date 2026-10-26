@@ -144,6 +144,40 @@ def insert_document(
     return inserted
 
 
+def remove_tenant(admin: psycopg.Connection, tenant: EvalTenant) -> None:
+    """
+    Remove a tenant from fresh_tenant and everything it owns, in foreign-key order.
+
+    Tests that commit rows must do this: the retrieval negative control runs as the cluster admin, which bypasses
+    row-level security, so it sees every tenant's chunks, and a chunk left behind by an earlier test breaks it (found
+    when the /ask tests left theirs: CI failed with UnknownVersionError, a local run in chunks did not).
+    """
+    admin.execute(
+        "UPDATE grounded.documents SET current_version_id = NULL WHERE tenant_id = %s",
+        (tenant.tenant,),
+    )
+    for table in (
+        "answer_usage",
+        "tenant_settings",
+        "chunks",
+        "audit_log",
+        "document_versions",
+        "documents",
+    ):
+        admin.execute(
+            sql.SQL("DELETE FROM grounded.{} WHERE tenant_id = %s").format(sql.Identifier(table)),
+            (tenant.tenant,),
+        )
+    admin.execute("DELETE FROM grounded.tenant_memberships WHERE tenant_id = %s", (tenant.tenant,))
+    admin.execute(
+        "DELETE FROM grounded.tenant_email_domains WHERE tenant_id = %s", (tenant.tenant,)
+    )
+    admin.execute(
+        "DELETE FROM grounded.users WHERE id = ANY(%s)", ([tenant.admin, tenant.employee],)
+    )
+    admin.execute("DELETE FROM grounded.tenants WHERE id = %s", (tenant.tenant,))
+
+
 @pytest.fixture
 def tenants(admin: psycopg.Connection) -> Iterator[Callable[[], EvalTenant]]:
     """Makes tenants on demand and removes everything they own afterwards, in foreign-key order."""
@@ -156,24 +190,4 @@ def tenants(admin: psycopg.Connection) -> Iterator[Callable[[], EvalTenant]]:
 
     yield make
     for tenant in created:
-        admin.execute(
-            "UPDATE grounded.documents SET current_version_id = NULL WHERE tenant_id = %s",
-            (tenant.tenant,),
-        )
-        for table in ("chunks", "audit_log", "document_versions", "documents"):
-            admin.execute(
-                sql.SQL("DELETE FROM grounded.{} WHERE tenant_id = %s").format(
-                    sql.Identifier(table)
-                ),
-                (tenant.tenant,),
-            )
-        admin.execute(
-            "DELETE FROM grounded.tenant_memberships WHERE tenant_id = %s", (tenant.tenant,)
-        )
-        admin.execute(
-            "DELETE FROM grounded.tenant_email_domains WHERE tenant_id = %s", (tenant.tenant,)
-        )
-        admin.execute(
-            "DELETE FROM grounded.users WHERE id = ANY(%s)", ([tenant.admin, tenant.employee],)
-        )
-        admin.execute("DELETE FROM grounded.tenants WHERE id = %s", (tenant.tenant,))
+        remove_tenant(admin, tenant)
