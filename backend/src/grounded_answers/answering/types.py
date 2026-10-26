@@ -30,6 +30,9 @@ class AnswerRequest:
     # Reasoning tokens count against this limit on reasoning models, so it is not small.
     max_output_tokens: int = 1000
     timeout_seconds: float = 45.0
+    # The one retry after invalid output adds a fixed note to the prompt (ADR 0032, decision 5). It never carries
+    # the previous output or the error.
+    corrective: bool = False
 
 
 def sources_from_chunks(chunks: Sequence[RetrievedChunk]) -> tuple[SourceChunk, ...]:
@@ -38,12 +41,21 @@ def sources_from_chunks(chunks: Sequence[RetrievedChunk]) -> tuple[SourceChunk, 
 
 
 @dataclass(frozen=True)
-class ModelAnswer:
-    """The provisional answer shape (Step 4 fixes the contract). `citations` are source numbers."""
+class Citation:
+    """What the model cites: the number of a source and a quote that must appear in it (checked in validate.py)."""
 
-    answered: bool
+    ref: int
+    quote: str
+
+
+@dataclass(frozen=True)
+class ModelAnswer:
+    """The answer contract as the model returns it (ADR 0032). A refusal has an empty answer and no citations."""
+
+    refused: bool
+    refusal_reason: str
     answer: str
-    citations: tuple[int, ...]
+    citations: tuple[Citation, ...]
 
 
 @dataclass(frozen=True)

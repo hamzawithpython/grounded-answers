@@ -1,9 +1,18 @@
+from grounded_answers.answering.respond import (
+    AnswerOutcome,
+    AnswerServiceError,
+    CitedSource,
+    GroundedAnswer,
+    Refusal,
+    answer_question,
+)
 from grounded_answers.answering.retry import answer_with_retries
 from grounded_answers.answering.types import (
     AnswerModel,
     AnswerModelError,
     AnswerRequest,
     AnswerResult,
+    Citation,
     InvalidOutput,
     ModelAnswer,
     ProviderRateLimited,
@@ -19,8 +28,13 @@ from grounded_answers.answering.types import (
 __all__ = [
     "AnswerModel",
     "AnswerModelError",
+    "AnswerOutcome",
     "AnswerRequest",
     "AnswerResult",
+    "AnswerServiceError",
+    "Citation",
+    "CitedSource",
+    "GroundedAnswer",
     "InvalidOutput",
     "ModelAnswer",
     "ProviderRateLimited",
@@ -28,8 +42,10 @@ __all__ = [
     "ProviderRejected",
     "ProviderTimeout",
     "ProviderUnavailable",
+    "Refusal",
     "SourceChunk",
     "Usage",
+    "answer_question",
     "answer_with_retries",
     "sources_from_chunks",
 ]

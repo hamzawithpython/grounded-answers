@@ -16,7 +16,11 @@ import httpx
 from pydantic import SecretStr
 
 from grounded_answers.answering.prompt import build_prompt
-from grounded_answers.answering.schema import ANSWER_SCHEMA, parse_answer
+from grounded_answers.answering.schema import (
+    ANSWER_SCHEMA,
+    parse_answer,
+    without_additional_properties,
+)
 from grounded_answers.answering.transport import post_json
 from grounded_answers.answering.types import (
     AnswerRequest,
@@ -34,7 +38,8 @@ _REFUSED: Final = frozenset({"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"
 
 
 def gemini_schema() -> dict[str, Any]:
-    return {k: v for k, v in ANSWER_SCHEMA.items() if k != "additionalProperties"}
+    schema: dict[str, Any] = without_additional_properties(ANSWER_SCHEMA)
+    return schema
 
 
 class GeminiAnswerModel:
