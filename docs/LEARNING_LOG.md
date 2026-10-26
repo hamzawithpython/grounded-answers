@@ -733,3 +733,34 @@ A: Correctness would depend on the planner and on how similar other tenants' doc
 
 **Q: What would you do at 100,000 chunks for one tenant?**
 A: Partition the chunks by tenant (or build an index per tenant), so each index holds only one tenant's rows and there is nothing to filter after the scan.
+
+## Session 5, Step 3b (answer providers): plain words
+
+### "Strict" JSON output from a model is a request, not a guarantee
+We asked Groq for strict JSON-schema output, and one call in about 61 still came back with JSON that broke the schema. Groq did not return it. It answered HTTP 400 with the code `json_validate_failed`. My first version treated every 400 as "your request is wrong" and stopped the run, which would also have hidden the problem. Now a 400 with that code is a different error ("the model's output was invalid"), and any other 400 stays "bad request". The two need different reactions: a bad request fails every time, while a bad generation may pass on the next call.
+
+**Q: Why not trust strict mode?**
+A: The model generates text and a validator checks it afterwards. When they disagree, the provider reports an error. The application must expect that path and must still validate what it reads (citation numbers, types) itself.
+
+**Q: How did you find it?**
+A: By running the real provider on all the questions, not only the fake HTTP tests. The fake responses only contain what we imagined.
+
+### Keep keys out of URLs
+Google's reference examples put the key in the URL (`?key=...`). URLs end up in logs and error messages. We send it in the `x-goog-api-key` header instead, and a test checks that the key is in no URL, body, log line, `repr` or error message. The HTTP library's own logger can print headers at DEBUG, so it is held at WARNING.
+
+### A model that worked yesterday may be closed to new accounts
+`gemini-2.5-flash-lite` answered 404 ("no longer available to new users") for a new account, though Google's docs list it as not deprecated. Vendor model lists describe the vendor, not your account. The runner stops on the first rejected call, so a closed model costs one request, not a whole day's quota.
+
+### Free-tier limits are a budget to plan
+Groq's free tier allows 8,000 tokens a minute and 200,000 a day. A 50-question run of 1,570-token prompts is about 78,000 tokens and 13 minutes. The runner paces its calls, stops at a token budget, and the report says what was used.
+
+### `httpx2` sat in the scaffold unnoticed: review every direct dependency by exact name, not by resemblance
+The first scaffold commit declared `httpx2` as a dev dependency, probably meaning `httpx` (used by the web framework's test client). It was never imported, so nothing broke, and it stayed through every session. It turned out to be a real package (a continuation of httpx maintained by the Pydantic organisation), but that is luck, not a control: a near-miss package name is the classic way a malicious package gets in (typosquatting), and my own live runs sent API keys through it before the review caught it. The review note was right to ask for the exact name.
+
+What changed: the real `httpx` is now the declared dependency, `docs/DEPENDENCIES.md` lists every direct dependency with its exact PyPI name, licence, link and reason, and a unit test fails when `pyproject.toml` and that list disagree (checked by adding a fake `httpx2` and watching it fail).
+
+**Q: How would you stop a typosquatted dependency?**
+A: Pin and review direct dependencies by exact name and owner, keep a short allow-list that CI compares with the project file, read the lockfile diff on every dependency change, and never put real secrets through a package nobody has looked at. Hash-pinned lockfiles stop a package changing after review but not a wrong package chosen at review time.
+
+**Q: What was the cost of the mistake?**
+A: Two API keys went through an unreviewed package, so they are rotated as a precaution.

@@ -34,3 +34,6 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Evaluation outputs (numbers and ids only), written by pytest -m eval when EVAL_REPORT_PATH points here
+backend/.eval-output/

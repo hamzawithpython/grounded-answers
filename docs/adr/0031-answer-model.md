@@ -27,10 +27,12 @@ Sizing used for all figures: about 1,100 input tokens (question plus five chunks
 | Candidate | Role | Why |
 |---|---|---|
 | Groq `openai/gpt-oss-120b`, free | Demo choice (decision 1) | Zero cost, fast, strict schema |
-| Gemini 2.5 Flash-Lite, free | Second zero-cost candidate, fictional data only | $0 on the free tier; paid price is $0.10 / $0.40 per million tokens |
-| Claude Haiku 5.5, paid | Paid, no-training reference | $0.10 / $0.50 per million tokens; no training by default; deleted within 30 days; ZDR by agreement; JSON-schema output supported |
+| ~~Gemini 2.5 Flash-Lite~~ → **Gemini 3.5 Flash-Lite**, free (amended 2026-10-26) | Second zero-cost candidate, fictional data only | $0 on the free tier; paid price is $0.30 / $2.50 per million tokens. 2.5 Flash-Lite is closed to new accounts (see Findings). |
+| Claude Haiku 5.5, paid | Paid, no-training adapter, **not live-tested** (amended 2026-10-26, see below) | $0.10 / $0.50 per million tokens; no training by default; deleted within 30 days; ZDR by agreement; JSON-schema output supported |
 
-Estimated cost per answer: gpt-oss-120b paid $0.00029, Gemini 2.5 Flash-Lite $0.00019, Haiku 5.5 $0.00021. All are under the $0.002 target. Claude Sonnet 5.5 ($0.0042) is over it and is not a candidate.
+**Amendment (Step 3b, 2026-10-26): Haiku is not live-tested.** There is no budget for a paid account during development. The Anthropic adapter is built and tested offline only, against fake HTTP responses that follow Anthropic's documented request and response format. Its first live call belongs to the acceptance test of a deployment whose client brings a paid key. The live comparison is therefore between the two free tiers (fictional data only), and the paid no-training path is unmeasured until a client provides a key.
+
+Estimated cost per answer: gpt-oss-120b paid $0.00029, Gemini 2.5 Flash-Lite $0.00019 (closed to new accounts; Gemini 3.5 Flash-Lite measured at $0.00053), Haiku 5.5 $0.00021. All are under the $0.002 target. Claude Sonnet 5.5 ($0.0042) is over it and is not a candidate.
 
 **Gemini's free tier is for fictional data only.** Google's terms say the free tier's prompts and responses are used to improve its products, that human reviewers may read them, and that confidential or personal data must not be submitted. They also require the paid tier for users in the EEA, Switzerland and the UK.
 
@@ -46,7 +48,7 @@ A provider may receive a real client's text only if:
 4. **Commercial use** is allowed on that tier.
 5. **The client has approved the provider** as a subprocessor, per tenant, before any text is sent. A tenant with no approved provider cannot call `/ask`.
 
-Free tiers never qualify. Of what was checked: Anthropic (no training by default, deleted within 30 days, ZDR by agreement), OpenAI (no training by default, abuse logs up to 30 days, ZDR on approval, US or EU processing) and paid Gemini (no training; logged for a limited period; may be cached in any country where Google operates) state points 1 and 2 on their official pages. The remaining points (the signed DPA and the region) still need checking before a first real client.
+**Real-client deployments use a client-paid or client-owned (BYOK, "bring your own key") no-training key**, stored per deployment and never shared with another client. We do not pay for a client's answers and we do not use our own free-tier keys for client data. Free tiers never qualify. Of what was checked: Anthropic (no training by default, deleted within 30 days, ZDR by agreement), OpenAI (no training by default, abuse logs up to 30 days, ZDR on approval, US or EU processing) and paid Gemini (no training; logged for a limited period; may be cached in any country where Google operates) state points 1 and 2 on their official pages. The remaining points (the signed DPA and the region) still need checking before a first real client.
 
 **Recorded as a future option, not v1: a local-only mode.** The only way for text never to leave is a model on our own host. A candidate is Qwen3-4B-Instruct-2507 (Apache-2.0, 4.0 billion parameters, non-thinking only). It was not measured. It would need several GB of memory against the embedder's roughly 1.1 GB budget, and CPU generation speed is unknown. It needs its own measurement before it can be offered.
 
@@ -87,12 +89,18 @@ API keys are held as `SecretStr` in `Settings`, read from the git-ignored `backe
 - **Operational:** three providers means three keys and three sets of terms to keep current. The terms were read once, on 2026-10-26, and must be re-read before any real client, because they change.
 - **Security:** document text leaves our system on every answer. SECURITY records the provider as a subprocessor and the controls above.
 
-## Open questions (answered by the test step)
+## Findings of the test step (Step 3b, 2026-10-26; numbers in docs/EVAL.md)
 
-- How many reasoning tokens does gpt-oss-120b spend at effort `low`, and do they appear in the usage figures?
-- Does Gemini 2.5 Flash-Lite support JSON-schema output? The structured-output page does not mention this model. Its free-tier limits are only shown in AI Studio.
-- Real latency of each candidate, against the 8 s p95 target. Only Groq publishes a speed figure.
-- Groq's paid-tier DPA text.
+- **Groq gpt-oss-120b works and meets both targets** on 50 questions: p95 latency 1.1 s (target 8 s), list-price cost $0.00034 at p95 (target $0.002). Reasoning at effort `low` is about 50 tokens per answer (44% of output), and the usage figure includes it. Input is 93% of the tokens, so one 50-question run uses about 78,000 of the 200,000 daily tokens. Pacing is set by the 8,000 tokens per minute limit (a full run takes about 13 minutes).
+- **Strict schema is not a guarantee.** One call failed with HTTP 400 `json_validate_failed` (the model's JSON broke the schema). The adapter now types that as invalid output. Citation validation and a retry policy for invalid output belong to Step 4; this is one failure in about 61 calls, not a rate.
+- **`gemini-2.5-flash-lite` is not available to this account** (HTTP 404, "no longer available to new users"; Google limits the 2.5 models to past users). The replacement Google recommends, `gemini-3.5-flash-lite`, was tried with one 5-question call and **works**: 5 of 5 calls succeeded on a key from a project with no billing (so on the free tier), every output parsed against the response schema, and Google's model page lists "Structured outputs: Supported". Measured: p95 latency 1.9 s (target 8 s), list-price cost $0.00053 mean and $0.00060 p95 per answer (target $0.002), no thinking tokens reported by default, 1,430 tokens per answer. Google sends no rate-limit headers and the free-tier limits are shown only in AI Studio, so they are unknown and the daily capacity of this tier is not measured. Five questions are a smoke test, not a comparison with Groq. The candidate in decision 2 is now Gemini 3.5 Flash-Lite.
+- Haiku was not live-tested (amendment above). The offline adapter test is the only evidence for it.
+
+## Open questions
+
+- The free-tier limits of Gemini 3.5 Flash-Lite on this account (visible only in AI Studio), and its behaviour over more than five calls.
+- How often strict-schema output fails on Groq over more calls (Step 7).
+- Groq's paid-tier DPA text (before any real client).
 
 ## Sources (official pages, read 2026-10-26)
 
