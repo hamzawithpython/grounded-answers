@@ -456,6 +456,34 @@ flowchart LR
 - **Query embedding in the web process (decided, built with `POST /ask`):** the model loads once in the app lifespan before the app is ready, each question is embedded with `asyncio.to_thread` bounded to about 4 at a time, and `/ready` fails until the model is loaded. Each process holds about 0.76 GB (peak 1.1 GB while loading), so run one worker per container.
 - **Known limit.** Table chunks carry only the section label (for example `6`), not the clause of the table's caption (`6.2`), so a citation of a table is section-level until ingestion is changed (PROGRESS, q012).
 
+### 6.1 The answer path (Session 5, Step 4, ADR 0031 and ADR 0032; built, not yet behind `POST /ask`)
+
+`answer_question(model, question, chunks)` turns the retrieved chunks into a checked answer or a refusal. The model is behind the provider-neutral `AnswerModel` interface (ADR 0031). The model sees only the question and the chunk text in `<source id="n">` blocks. Titles, versions, ids and clause labels stay on our side and are attached to the citations afterwards.
+
+```mermaid
+flowchart TD
+  C[retrieved chunks] --> N{any chunks?}
+  N -- no --> R1[refusal: not_in_documents, no model call]
+  N -- yes --> A[ask the model: rules, source blocks, question]
+  A -- provider failed --> ERR[AnswerServiceError, an error and not a refusal]
+  A -- safety block --> R2[refusal: declined]
+  A --> P[parse the JSON contract]
+  P -- model refused --> R3[refusal with our wording]
+  P -- answer --> V[validate: refs, quotes, table rule, numbers]
+  P -- not valid JSON or cut off --> BAD[invalid output]
+  V -- invalid --> BAD
+  BAD -- first time --> A2[ask again with the fixed corrective note]
+  A2 --> P
+  BAD -- second time --> R4[refusal: could_not_verify]
+  V -- valid --> OK[answer with citations: chunk, quote, clause]
+```
+
+- **Contract:** `refused`, `refusal_reason`, `answer`, `citations` (each `ref` and `quote`). No confidence field.
+- **Validation** (`validate.py`): the ref is one of the k sources; the normalised quote appears in that source; at least 20 characters (8 and a word for a table chunk); no ellipsis; every number of the answer appears in a quote. Any failure invalidates the whole answer. It proves the quote exists, not that the answer is fully supported (Step 7).
+- **Clause** (`clauses.py`): the nearest label at or before the quote, within the chunk's own section; the section when there is none; the section for a table.
+- **Retry:** one, with a fixed note; the second failure is `could_not_verify`. Broken output is never shown.
+- **Logs:** provider, model, outcome, attempts, invalid-output codes and token counts only.
+
 ## 7. Row-Level Security summary
 
 | Table | RLS | Policies |

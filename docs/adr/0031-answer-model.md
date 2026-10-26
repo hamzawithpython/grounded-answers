@@ -64,7 +64,7 @@ One protocol, `AnswerModel`, with one method, `answer(request) -> result`, in it
 
 ### 5. A tested rule: a prompt contains only the question and chunk text
 
-The prompt builder takes only the question, the chunk text and the fixed instructions. It never receives a user id, an email, a tenant id or a document id that identifies a person or tenant. A test builds prompts from inputs seeded with such values and asserts that none of them appears in the request sent to the adapter. Chunk identifiers inside the prompt are position numbers local to that request (for example `[1]` to `[5]`), mapped back to chunks by our code after the answer returns.
+The prompt builder takes only the question, the chunk text and the fixed instructions. It never receives a user id, an email, a tenant id or a document id that identifies a person or tenant. A test builds prompts from inputs seeded with such values and asserts that none of them appears in the request sent to the adapter. Chunk identifiers inside the prompt are position numbers local to that request (for example `[1]` to `[5]`), mapped back to chunks by our code after the answer returns. (Amended by ADR 0032, decision 6: the sources are now `<source id="n">` blocks. The rule is unchanged.)
 
 ### 6. Per-answer metering for the cost cap
 

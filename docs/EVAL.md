@@ -362,3 +362,43 @@ One 5-question call, on a key from a project with no billing. Schema support is 
 | Free limits | unknown: Google sends no rate-limit headers; the limits are shown only in AI Studio |
 
 Five calls say it works and what each costs. They do not measure its daily capacity, its failure rate, or its quality against Groq.
+
+## Answer contract, Session 5 Step 4 (2026-10-26)
+
+What was measured: the clause detector on the real demo chunks, and one live smoke test through the whole answer path (ADR 0032). Answer quality is not scored here (Step 7).
+
+### Where clause labels sit in the real chunks
+
+| Fact | Value |
+|---|---|
+| Expected (document, clause) pairs whose clause is a label at the **start of a line** in a current chunk | 28 of 45 |
+| The same pairs found by the **position-based detector** (own-section labels, cross-references excluded) | 45 of 45 |
+| Chunks in the demo set | 127 text and 30 table |
+| Text chunks with no clause label (their quotes get the section) | 15 of 127 |
+| Text chunks whose first label is not at the start (a quote before it gets the section) | 16 of 127 |
+
+Why line-start fails: extraction flattens sub-clauses into one line, as in `- 3.2.1 Probation is 3 months ... - 3.2.2 Probation for HTV ...` in Word files and `rules-3.4.1 Speed limits:` in PDFs. "Found" means the label exists as a candidate in some chunk of that document. It does not show that each quote gets the right label: that is measured in Step 7 with real quotes.
+
+### Live smoke test through the full path (Groq gpt-oss-120b, free tier, 5 questions)
+
+| Measure | Value |
+|---|---|
+| Calls ok | 5 of 5 |
+| Retries / could_not_verify / invalid output codes | 0 / 0 / none |
+| Tokens | input 8,582; output 823 (reasoning 372); 1,881 per answer (1,566 before quotes were asked for) |
+| Latency | p50 935 ms, p95 1,513 ms (target 8,000 ms) |
+| List-price cost per answer | mean $0.00036, p95 $0.00041 (target $0.002) |
+| Sanity | answered 4 of 4 answerable; refused 1 of 1 unanswerable |
+
+Five questions say the path works end to end. They do not give a rate of retries, invalid output, false refusals or wrong clauses. Those need the 50 questions in Step 7.
+
+### Planted defects
+
+Thirteen defects, each planted alone, each caught by a test: forged ref accepted, quote-not-found accepted, empty citations accepted, number check removed, table quote minimum equal to the text minimum, bare-number table quote accepted, ellipsis accepted, retry removed, cross-references counted as clauses, other-section labels counted as clauses, source tags not escaped, model refusal text shown to the user, provider failure turned into a refusal. One defect was first missed (other-section labels), because the test body also had a cross-reference word before the label. A test that isolates it was added.
+
+### To measure in Step 7
+
+- Groundedness of the answer text. Quote validation proves that the cited text exists, not that the whole answer is supported by it.
+- The false-refusal rate of the strict citation rule and of the numeric check (paraphrased quotes, derived numbers, numbers in words).
+- Clause accuracy: does each quote get the right clause?
+- Why q043 and q044 were refused earlier, and `RETRIEVAL_TOP_K` 5 against 8.
