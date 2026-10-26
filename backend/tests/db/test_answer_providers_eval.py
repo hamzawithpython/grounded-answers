@@ -46,7 +46,7 @@ from tests.db.database import DbHandle
 from .eval_support import app_sessions, fresh_tenant, load_files, read_demo_files
 from .ingest_support import Made
 
-pytestmark = [pytest.mark.eval, pytest.mark.anyio]
+pytestmark = [pytest.mark.eval, pytest.mark.live, pytest.mark.anyio]
 
 DEMO = Path(__file__).resolve().parents[3] / "demo-data" / "indus-freight"
 DEFAULT_PACE = {"groq": 12.0, "gemini": 5.0}
