@@ -764,3 +764,23 @@ A: Pin and review direct dependencies by exact name and owner, keep a short allo
 
 **Q: What was the cost of the mistake?**
 A: Two API keys went through an unreviewed package, so they are rotated as a precaution.
+
+## Session 5, Step 4 (the answer contract): plain words
+
+### Check what a model says against what it was given, in code
+A model can return a citation that looks perfect and is wrong: a source number that was never given, a quote that is not in the source, or a number that appears nowhere in the evidence. So the answer is not shown until our code has checked three things: the source number is one of the k sources, the quote really appears in that source (after the same cleaning of whitespace, quotes, dashes and case on both sides), and every number in the answer appears in a quote. If any check fails the answer is thrown away, the model gets one more try with a fixed reminder, and if it fails again the user gets our own refusal text. The user never sees broken output.
+
+**Q: Does a valid quote mean the answer is right?**
+A: No. It means the quote exists. The answer could still say more than the quote supports. That is measured separately (groundedness, Step 7). The number check catches one common drift and nothing more.
+
+**Q: Why is one bad citation enough to throw the answer away?**
+A: The answer does not say which sentence a citation supports. If we dropped the bad one, a claim could stay on screen with nothing behind it. The cost is some false refusals, so we count them and tune later with data.
+
+### A refusal and an error are different things
+If the documents do not contain the answer, that is a refusal: a normal result with our own wording. If the provider times out or rejects the key, that is an error: the service is unavailable. Mixing them hides outages inside the refusal rate and tells the user the wrong thing.
+
+### Real data beat the plan
+The plan said to find the clause by looking for numbers at the start of lines. On the real chunks that found only 28 of 45 expected clauses, because extraction joins sub-clauses into one line. Looking at the actual text first led to a position-based rule that finds all 45. A planted-defect run also caught one gap in my own tests (a label excluded for two reasons, so removing one reason changed nothing).
+
+### Keep model words away from users on a refusal
+A refusal carries a fixed reason code, and the wording comes from our code. A model that was tricked by text inside a document cannot put its own words in front of an employee that way.

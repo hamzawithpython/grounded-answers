@@ -63,13 +63,13 @@ No WhatsApp. No phone/voice in v1.
 ### 6.2 Answering
 - Hybrid retrieval: keyword search + vector search, results merged; optional reranking.
 - Answer generated **only** from retrieved passages, returned as structured output:
-  answer text, citations (document, section/page, quoted span), confidence, and a refusal flag.
+  answer text, citations (document, section or clause, quoted span), and a refusal flag with a reason code. (Amended 2026-10-26, ADR 0032: no model-reported confidence field; it is not calibrated. Citations are checked against the sources before an answer is shown.)
 - If evidence is weak or missing → polite refusal + suggestion to contact HR (no guessing).
 - Conversation context within a session (follow-up questions work).
 
 ### 6.3 Feedback & review
 - Employees can mark answers helpful / not helpful with an optional comment.
-- Admins see a review queue of low-confidence, refused and down-voted answers.
+- Admins see a review queue of refused and down-voted answers, and of answers that needed a retry or failed validation (replaces "low-confidence", ADR 0032).
 
 ### 6.4 Analytics
 - Questions per day, top topics, refusal rate, helpfulness rate, median response time, cost per answer.

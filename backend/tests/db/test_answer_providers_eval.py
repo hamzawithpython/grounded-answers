@@ -25,7 +25,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from grounded_answers.answering import AnswerModel, sources_from_chunks
+from grounded_answers.answering import AnswerModel
 from grounded_answers.answering.adapters import GeminiAnswerModel, GroqAnswerModel
 from grounded_answers.answering.transport import make_client
 from grounded_answers.config import get_settings
@@ -96,11 +96,7 @@ async def test_answer_providers_on_the_demo_questions(
                 chunks = await retrieve(
                     session, question.text, vector, top_k=settings.retrieval_top_k
                 )
-            items.append(
-                AnswerItem(
-                    question.id, question.text, question.answerable, sources_from_chunks(chunks)
-                )
-            )
+            items.append(AnswerItem(question.id, question.text, question.answerable, tuple(chunks)))
 
     chosen = select_items(items, limit)
     runs: list[ProviderRun] = []

@@ -12,6 +12,7 @@ from pydantic import SecretStr
 
 from grounded_answers.answering import (
     AnswerModel,
+    Citation,
     InvalidOutput,
     ProviderRateLimited,
     ProviderRefused,
@@ -28,6 +29,7 @@ from grounded_answers.answering.adapters import (
 from .answering_support import (
     REQUEST,
     Wire,
+    answer_json,
     anthropic_response,
     gemini_response,
     groq_response,
@@ -54,11 +56,8 @@ async def test_a_good_response_becomes_an_answer_with_usage(
 ) -> None:
     wire = replying(200, ok(), {"x-ratelimit-remaining-tokens": "7000", "set-cookie": "no"})
     result = await make(wire.client).answer(REQUEST)
-    assert (result.answer.answered, result.answer.answer, result.answer.citations) == (
-        True,
-        "Thirty days.",
-        (1,),
-    )
+    assert (result.answer.refused, result.answer.answer) == (False, "Notice is thirty days.")
+    assert result.answer.citations == (Citation(1, "Notice is thirty days."),)
     assert result.provider == name
     assert result.usage.input_tokens > 0 and result.usage.output_tokens > 0
     assert result.latency_ms >= 0
@@ -87,8 +86,10 @@ async def test_the_schema_is_sent_and_the_request_is_deterministic(
     await make(wire.client).answer(REQUEST)
     body = wire.last_body
     assert "Question: How many days of notice?" in json.dumps(body)
-    assert "[1] Notice is thirty days." in json.dumps(body)
-    assert "answered" in json.dumps(body)
+    assert json.dumps('<source id="1">\nNotice is thirty days.\n</source>')[1:-1] in json.dumps(
+        body
+    )
+    assert "refusal_reason" in json.dumps(body)
 
 
 async def test_groq_asks_for_strict_schema_and_low_reasoning() -> None:
@@ -101,6 +102,8 @@ async def test_groq_asks_for_strict_schema_and_low_reasoning() -> None:
     assert body["include_reasoning"] is False
     assert body["response_format"]["json_schema"]["strict"] is True
     assert body["response_format"]["json_schema"]["schema"]["additionalProperties"] is False
+    item = body["response_format"]["json_schema"]["schema"]["properties"]["citations"]["items"]
+    assert item["additionalProperties"] is False and item["required"] == ["ref", "quote"]
     assert wire.requests[-1].headers["authorization"] == f"Bearer {KEY.get_secret_value()}"
 
 
@@ -129,7 +132,14 @@ async def test_gemini_uses_the_header_and_a_schema_without_additional_properties
     config = wire.last_body["generationConfig"]
     assert config["responseMimeType"] == "application/json"
     assert "additionalProperties" not in config["responseSchema"]
-    assert config["responseSchema"]["required"] == ["answered", "answer", "citations"]
+    assert config["responseSchema"]["required"] == [
+        "refused",
+        "refusal_reason",
+        "answer",
+        "citations",
+    ]
+    # Nowhere in the nested schema either.
+    assert "additionalProperties" not in json.dumps(config["responseSchema"])
 
 
 async def test_gemini_thinking_tokens_are_billed_as_output() -> None:
@@ -216,11 +226,15 @@ async def test_output_that_is_not_the_schema_is_invalid(
 ) -> None:
     bad_outputs = [
         "not json at all",
-        json.dumps({"answered": True, "answer": "x"}),
-        json.dumps({"answered": True, "answer": "x", "citations": [1], "extra": 1}),
-        json.dumps({"answered": "yes", "answer": "x", "citations": []}),
-        json.dumps({"answered": True, "answer": "x", "citations": ["1"]}),
-        json.dumps({"answered": True, "answer": "x", "citations": [True]}),
+        json.dumps({"refused": False, "answer": "x"}),
+        json.dumps({**json.loads(answer_json()), "extra": 1}),
+        answer_json().replace('"refused": false', '"refused": "no"'),
+        answer_json().replace('"none"', '"made_up_reason"'),
+        answer_json(citations=[{"ref": "1", "quote": "Notice is thirty days."}]),
+        answer_json(citations=[{"ref": True, "quote": "Notice is thirty days."}]),
+        answer_json(citations=[{"ref": 1}]),
+        answer_json(citations=[{"ref": 1, "quote": "Notice is thirty days.", "extra": 1}]),
+        json.dumps({**json.loads(answer_json()), "citations": [1]}),
         json.dumps([1, 2]),
     ]
     for output in bad_outputs:

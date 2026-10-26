@@ -20,7 +20,7 @@ MAX_CHARS = 1200
 MAX_BODY_CHARS = 20000
 
 # A clause label has at least one dot: 3.2, 3.2.2. Top-level numbers are only labels when they are a section.
-_DOTTED = re.compile(r"(?<![\d.])(\d+(?:\.\d+)+)(?![\d])")
+DOTTED_LABEL = re.compile(r"(?<![\d.])(\d+(?:\.\d+)+)(?![\d])")
 
 
 class ChunkTooLong(ValueError):
@@ -37,7 +37,7 @@ class Chunk:
 
 
 def clause_labels(body: str, section_number: str | None) -> tuple[str, ...]:
-    labels = set(_DOTTED.findall(body))
+    labels = set(DOTTED_LABEL.findall(body))
     if section_number:
         labels.add(section_number)
     return tuple(sorted(labels))
