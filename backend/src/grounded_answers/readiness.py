@@ -35,6 +35,7 @@ EXPECTED_SCHEMA_HEAD = "0017_answer_usage_settings"
 DATABASE = "database"
 CACHE = "cache"
 SCHEMA = "schema"
+EMBEDDER = "embedder"
 
 CheckFn = Callable[[], Awaitable[None]]
 
@@ -48,6 +49,25 @@ class SchemaVersionMismatchError(Exception):
         super().__init__("schema version mismatch")
         self.found = found
         self.expected = expected
+
+
+class EmbedderNotReadyError(Exception):
+    """The query embedding model is still loading, or its load failed (ADR 0033, decision 7)."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__("embedder not ready")
+        self.state = state
+
+
+def make_embedder_check(state: Callable[[], str]) -> CheckFn:
+    """Fail until the query embedder reports "ready". `state` is read at check time, so the answer can change."""
+
+    async def check() -> None:
+        current = state()
+        if current != "ready":
+            raise EmbedderNotReadyError(current)
+
+    return check
 
 
 def make_database_check(engine: AsyncEngine) -> CheckFn:
@@ -131,6 +151,9 @@ class ReadinessChecker:
             await asyncio.wait_for(self._checks[name](), timeout=self._check_timeout)
         except TimeoutError:
             logger.warning("readiness check failed: %s (timeout)", name)
+            return False
+        except EmbedderNotReadyError as exc:
+            logger.warning("readiness check failed: %s (%s)", name, exc.state)
             return False
         except SchemaVersionMismatchError as exc:
             logger.warning(

@@ -14,14 +14,19 @@ from grounded_answers.config import Settings, get_settings
 from grounded_answers.database import create_database_engine, create_session_factory
 from grounded_answers.documents_api import router as documents_router
 from grounded_answers.documents_list import router as documents_list_router
+from grounded_answers.embedding.model import load_embedder
+from grounded_answers.embedding.query import QueryEmbedder, QueryModel
 from grounded_answers.jobs.app import build_app, conninfo_from_sqlalchemy_url
 from grounded_answers.jobs.logging_filter import install_job_log_redaction
 from grounded_answers.passwords import make_dummy_hash
 from grounded_answers.rate_limit import LoginLimiter, wall_clock_ms
 from grounded_answers.readiness import (
+    EMBEDDER,
+    CheckFn,
     ReadinessChecker,
     make_cache_check,
     make_database_check,
+    make_embedder_check,
     make_schema_check,
 )
 from grounded_answers.storage.postgres_store import PostgresObjectStore
@@ -63,6 +68,32 @@ async def _load_auth_state(app: FastAPI, settings: Settings, cache: Redis) -> No
     app.state.upload_limiter = UploadLimiter(cache, rate_secret.encode("ascii"), wall_clock_ms)
 
 
+def build_query_embedder(
+    settings: Settings, loader: Callable[[], QueryModel] | None = None
+) -> QueryEmbedder | None:
+    """
+    The query embedder, or None when POST /ask is off (ADR 0033, decision 7).
+
+    When it is on, EMBEDDING_MODEL_DIR must be set, so a missing setting stops startup with a message that names it.
+    `loader` is for tests; production loads the pinned model from that directory.
+    """
+    if not settings.ask_enabled:
+        return None
+    model_dir = settings.embedding_model_dir
+    if loader is None:
+        if model_dir is None:
+            raise RuntimeError(
+                "EMBEDDING_MODEL_DIR is not set (ASK_ENABLED is true; docs/RUNBOOK.md)"
+            )
+        directory = model_dir
+
+        def production_loader() -> QueryModel:
+            return load_embedder(directory, process="web")
+
+        loader = production_loader
+    return QueryEmbedder(loader, concurrency=settings.embed_concurrency)
+
+
 def _make_lifespan(
     injected: ReadinessChecker | None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -89,17 +120,26 @@ def _make_lifespan(
         app.state.object_store = PostgresObjectStore()
         app.state.job_app = build_app(conninfo_from_sqlalchemy_url(str(settings.database_url)))
         cache = Redis.from_url(str(settings.redis_url))
-        app.state.readiness = ReadinessChecker(
-            {
-                "database": make_database_check(engine),
-                "cache": make_cache_check(cache),
-                "schema": make_schema_check(engine),
-            }
-        )
+        checks: dict[str, CheckFn] = {
+            "database": make_database_check(engine),
+            "cache": make_cache_check(cache),
+            "schema": make_schema_check(engine),
+        }
+        query_embedder = build_query_embedder(settings)
+        if query_embedder is not None:
+            embedder: QueryEmbedder = query_embedder
+            checks[EMBEDDER] = make_embedder_check(lambda: embedder.state)
+        app.state.readiness = ReadinessChecker(checks)
+        app.state.query_embedder = query_embedder
         try:
             await _load_auth_state(app, settings, cache)
+            if query_embedder is not None:
+                # Loads in the background: the app takes requests at once and /ready says 503 until it is done.
+                query_embedder.start()
             yield
         finally:
+            if query_embedder is not None:
+                await query_embedder.aclose()
             await engine.dispose()
             await cache.aclose()
 

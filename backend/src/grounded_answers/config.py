@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     # How many chunks retrieval returns to the answer step (ADR 0030). 5 and 8 are compared in the answer evaluation.
     retrieval_top_k: int = Field(default=5, ge=1, le=20)
 
+    # POST /ask (ADR 0033). Off by default: with it off the endpoint answers 404 and the web process loads no
+    # embedding model, so development and CI stay light. On, EMBEDDING_MODEL_DIR is required (the pinned model
+    # directory, from `python -m grounded_answers.embedding.fetch`) and the process holds about 0.76 GB more.
+    ask_enabled: bool = False
+    embedding_model_dir: Path | None = None
+    # How many questions are embedded at the same time (ADR 0033, decision 7). Each takes two CPU threads.
+    embed_concurrency: int = Field(default=2, ge=1, le=4)
+
     # Answer-model API keys (ADR 0031). Read from backend/.env only, held as SecretStr so they never print.
     # Groq and Gemini free tiers take fictional data only. A real client's key is their own paid, no-training key.
     groq_api_key: SecretStr | None = None

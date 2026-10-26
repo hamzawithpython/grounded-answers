@@ -804,3 +804,23 @@ Costs are stored as millionths of a dollar in an integer column, and the CLI rea
 
 ### A name can be too long for the bookkeeping table
 The first migration id was 37 characters, and Alembic's version table holds 32. Every database test failed at setup with "value too long". The fix was a shorter id before anything persistent had used it. Once a migration is applied somewhere persistent, its id can never be changed, so check the length when you name it.
+
+## Session 5, Step 5b (query embedding in the web process): plain words
+
+### Choose a limit from a measurement, and measure the right thing
+We needed a number: how many questions may be embedded at once. A guess would be 4 (the CPU count). The measurement said memory does not change with the number at all (the model weights are shared), and with as many callers as slots the speed gain stops at 2: 1 slot about 48 per second, 2 slots about 64, 4 slots about 67, which is inside the difference between two runs. With four callers at once, 4 slots finished sooner (median 52 ms against 67 ms) but stalled the event loop longer (62 ms against 24 ms). Neither difference is something a user would notice, so the default is 2, with the numbers in the evaluation file and a command to measure again on a new machine. One result is still unexplained: 2 slots with four callers was slower per second than 2 slots with two callers, in both runs. It is written down as unexplained, not guessed at.
+
+**Q: Why run each case in its own process?**
+A: Memory numbers include everything the process did before. A fresh process per case means the figure belongs to that case only.
+
+**Q: Why run the whole matrix twice?**
+A: To see how much a number moves by chance. Here about 8 %, so a 4 % gain is not a gain.
+
+### A thread cannot be cancelled, so the slot belongs to the thread
+When a request gives up after 3 seconds, the work keeps running in its thread. If the code freed the slot at that moment, the next request could start another thread, and a slow period would pile up more and more running work. So the slot is released when the thread finishes, and a test proves that a timed-out request does not let a second thread start.
+
+**Q: What does `/ready` returning 503 while the model loads buy you?**
+A: A load balancer or a person can tell "alive but not ready" from "dead". The app answers `/health` at once, takes no questions it cannot answer, and a failed load stays visible instead of being a log line nobody reads.
+
+### A test that cannot fail points at redundant code
+One planted defect (skipping a state check) was not caught. The reason: the model is only set when the load succeeded, so the state check could never decide anything the model check did not. The fix was to delete the redundant check, not to write a test for unreachable behaviour.

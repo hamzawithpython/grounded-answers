@@ -518,6 +518,10 @@ flowchart TD
 - **Retry:** one, with a fixed note; the second failure is `could_not_verify`. Broken output is never shown.
 - **Logs:** provider, model, outcome, attempts, invalid-output codes and token counts only.
 
+### 6.2 Query embedding in the web process (Session 5, Step 5b, ADR 0033 decision 7)
+
+With `ASK_ENABLED=true` the web process loads the pinned embedding model after startup, in a background thread, so the app takes requests at once and `/ready` answers 503 `embedder` until the model is loaded (and stays 503 if the load fails). Embedding a question runs in a thread behind a semaphore of `EMBED_CONCURRENCY` slots (default 2). A caller waits at most 2 s for a slot (then 503 busy) and at most 3 s for the embedding (then 503 took too long). The process then holds about 0.76 GB steady and 1.1 GB at the peak of the load, whatever the concurrency (`docs/EVAL.md`). With `ASK_ENABLED` off (the default) none of this exists: no model is loaded and `/ready` does not wait for one.
+
 ## 7. Row-Level Security summary
 
 | Table | RLS | Policies |
