@@ -11,8 +11,8 @@ Plan approved 2026-10-26. Each step has its own branch and PR, and stops for rev
 | 1 | Retrieval evaluation harness against the test DB (`grounded_answers.evaluation`, `pytest -m eval -s`; smoke test in `-m db`) | ✅ Merged (PR #52). Results in `docs/EVAL.md` |
 | 2 | Retrieval strategy: ADR 0030 (decisions approved 2026-10-26), migration `0016_drop_hnsw_index`, `RETRIEVAL_TOP_K`, `retrieve()`, the k sweep in the harness, the scale test (`-m eval`, reproducible evidence) | ✅ Merged (PR #53); dev DB at 0016 |
 | 3a | Decision: answer model and provider (ADR 0031, decisions approved 2026-10-26) | ✅ Merged (PR #54) |
-| 3b | Provider test: `AnswerModel` interface, Groq/Gemini/Anthropic adapters, key handling, live run on the 50 questions | Built on `feat/step-3b-answer-model`, awaiting review. Groq works (50 of 50). `gemini-2.5-flash-lite` is closed to new accounts (404), so Gemini 3.5 Flash-Lite replaces it (5 of 5, smoke test). Haiku offline-tested only (no paid account). Keys rotated 2026-10-26. |
-| 4 | Answer contract, citation validation, refusal (ADR 0032, decisions approved 2026-10-26) | Built on `feat/step-4-answer-contract`, awaiting review. 5-question Groq check passed (no retries). |
+| 3b | Provider test: `AnswerModel` interface, Groq/Gemini/Anthropic adapters, key handling, live run on the 50 questions | ✅ Merged (PR #55). Groq works (50 of 50). `gemini-2.5-flash-lite` is closed to new accounts (404), so Gemini 3.5 Flash-Lite replaces it (5 of 5, smoke test). Haiku offline-tested only (no paid account). Keys rotated 2026-10-26. |
+| 4 | Answer contract, citation validation, refusal (ADR 0032, decisions approved 2026-10-26) | ✅ Merged (PR #56). 5-question Groq check passed (no retries). |
 | 5 | `POST /ask` (builds the query-embedding path in the web process, see below) | Planned |
 | 6 | Prompt-injection tests | Planned |
 | 7 | Answer evaluation (compare `RETRIEVAL_TOP_K` 5 and 8; cross-document answers may need more context) | Planned |
@@ -39,6 +39,80 @@ Plan approved 2026-10-26. Each step has its own branch and PR, and stops for rev
 **Step 4 instruction:** answerable and unanswerable vector scores overlap (0.82 to 0.84), so refusal cannot rest on a score threshold alone. It needs model judgement plus citation validation.
 
 **Known evidence limits (ADR 0030):** 45 pairs, so one pair is 0.022; the hybrid lead over vector is a hypothesis, and the old scratch figure of 0.76 is unexplained; 180 vs 190 chunks against the scratch set is unexplained; the scale data is synthetic copies of the real chunks.
+
+## Session 6+ outline (revised 2026-10-26 after review; the order and the SPEC scope changes are approved, each session's decisions are still to be made one by one)
+
+Goal: ship a **demoable v1** first. Order: Session 5 finish (Steps 5 to 7), then Sessions 6 to 9. Everything else is in "v1.1" and "v2" below. The SPEC was amended the same day with your approval (see the note at the top of `docs/SPEC.md`): conversation context, feedback and review queue, analytics, user-management and audit UI, and eval-in-CI move to v1.1; Telegram moves to v2; "time to first token" becomes "time to first visible state" (progress states; answer text is shown only after validation, ADR 0032). Every provider, price or limit fact is checked online on the day (CLAUDE.md); none is assumed here.
+
+**What v1 means.** An employee logs in and asks a question, gets a cited answer or a fixed refusal, and opens a citation to read the source passage. A tenant admin uploads, replaces and deletes documents and sees their status. The operator creates tenants and users with the admin CLI and runs the evaluation on demand with the CLI. Each question stands alone (no history). It runs on a real host, restarts itself, reports errors, has a public try-it account with a daily cap and a reset, and has a portfolio write-up.
+
+**Consequences of the cut for Step 5.** No conversation or feedback tables. The metering table (tokens, cost, latency, outcome code, retry flag, per tenant, with RLS, grants and the catalog guard) still comes with `/ask` for the cost cap. Decision for the Step 5 plan: store question and answer text at all, or counts and codes only (recommended in v1: counts and codes only, which also satisfies SPEC 7.1 data minimisation and removes a retention setting).
+
+### Session 5 (finish): Steps 5 to 7 (see the table above)
+`POST /ask`, prompt-injection tests, answer evaluation. Unchanged. Step 5 is designed for about 1.1 GB per web and per worker process and a pooler-agnostic connection use; if Session 6 finds a different host constraint, the rework is recorded then.
+
+### Session 6 - Hosting feasibility and decision (research and a throwaway trial)
+
+**Goal.** Find out whether a managed Postgres can run our bootstrap, because that can force the provider, and the provider fixes the pooler, memory and connection budget.
+
+**Steps.**
+1. Shortlist about 4 hosts (managed Postgres plus a separate app host, an all-in-one platform, a VPS with our own `docker-compose` Postgres, a free tier). From the official pages, with the date: RAM and price per instance (at least 1.1 GB per web and per worker process, so about 2.2 GB plus Postgres on one box), Postgres version, extension list, pooler, backups and retention, region, data-processing terms, free-tier limits.
+2. Check each bootstrap need, first in the documentation, then on a real trial instance: `CREATE ROLE` as `LOGIN` and `NOLOGIN` with `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`; setting a SCRAM-SHA-256 verifier as a password (`bootstrap_cluster.sql`); schemas `AUTHORIZATION migration_role`; objects and `SECURITY DEFINER` functions owned by the NOLOGIN definer roles (ownership transfer and `SET ROLE`); `CREATE SCHEMA extensions` and `CREATE EXTENSION vector SCHEMA extensions`; `FORCE ROW LEVEL SECURITY`; the exact-grant tests; whether the provider's admin role can run all three bootstrap files.
+3. Check the pooler: transaction mode against our prepared-statement setting (ADR 0005), `LISTEN/NOTIFY` for the queue (ADR 0015 decision 6), and the connection budget (web max + worker pool + worker LISTEN + migration and operator).
+4. Run the migrations and `pytest -m db` against the trial instance (throwaway database, fictional data, no secrets in the repo). Record every result in SECURITY.md (hosting checklists in RUNBOOK, ADR 0018 and ADR 0021).
+
+**Decisions.** (a) Managed Postgres, or self-managed Postgres on a VPS if the bootstrap does not fit (the fallback that removes every constraint, at the cost of running backups and upgrades yourself). (b) Where web and worker run, and whether the frontend shares a registrable domain with the API (the refresh cookie, CORS and CSRF in Session 7 depend on it). (c) Any paid service needs an ADR with price and alternative (SPEC 7.5).
+
+**Verified by.** A pass or fail per bootstrap statement, trial output (statements and numbers, no secrets) in the ADR, and `pytest -m db` green against the trial instance. If nothing passes, the ADR says so and picks the VPS.
+
+### Session 7 - Frontend: login, chat, admin documents (accessibility and security headers built in)
+
+**Goal.** The v1 screens, accessible and safe by construction, not as a later pass. May be split into 7a (login and chat) and 7b (admin documents) when planned.
+
+**Steps.**
+- Login with the access token in memory only and the refresh token in an httpOnly cookie (ADR 0012, 0013); silent refresh on load and on 401 with one refresh in flight; logout; route guards.
+- Chat: a progress state while the answer is produced, then the validated answer; clickable citations that open the source passage (document, clause, quoted span); the fixed refusal messages by reason code; the "could not verify" and service-unavailable states. Model text is rendered as plain text, never HTML, and no model-controlled links.
+- Admin documents page: upload with type and size feedback, status (queued, processing, ready, failed with reason), replace, delete with the retention explanation. The API stays the authority; the UI hides what the API refuses.
+- Accessibility from the first component: keyboard use, focus management, labels, contrast, screen-reader names for citations and status changes, reduced motion.
+- Security headers from the first deploy: CSP without `unsafe-inline` (nonces or hashes), `frame-ancestors`, `Referrer-Policy`, `Permissions-Policy`, `X-Content-Type-Options`; HSTS at the host.
+- Frontend dependency and licence review by exact name (as for the backend).
+
+**Decisions.** Call the API directly or through a Next.js server layer (cookies, CORS, CSRF); CSRF protection on the cookie-based refresh and logout (SameSite value, a custom header, or both); polling interval for ingestion status; CSP strictness against the framework's inline needs; accessibility level to claim (WCAG 2.2 AA is the usual target); component and chart-free styling within the existing Tailwind setup.
+
+**Verified by.** Vitest and Testing Library tests for the auth flow (expired access token, rotated refresh, reuse detection showing logged-out); a Playwright run against a local stack (login, ask, open citation, refusal, admin upload and delete, logout); axe checks with zero serious findings; a CSP test that fails when an inline script appears and a header test; an employee-versus-admin access test on every admin route and endpoint; lint and typecheck in CI; a written manual keyboard and screen-reader pass in SECURITY.md.
+
+### Session 8 - Deployment and observability
+
+**Goal.** The system runs on the chosen host, restarts itself, and tells you when it is unhealthy.
+
+**Steps.** Images for web and worker (model files baked in at build, never downloaded at start, ADR 0022); secrets in the host's secret store, with key rotation steps in the RUNBOOK; HTTPS and redirects; migrations as a release step with a rollback note; backups and the restore rule for purged documents (ADR 0007 and the RUNBOOK restore section: after a restore, re-run the purge so deleted documents do not return), with a restore drill; **worker restart policy together with the deferred bounded-reconnect change** (PROGRESS, Session 4 "Change 2"), tested with a real database restart; structured logs with no document or question text; **error tracking** with request bodies scrubbed; LLM tracing that records ids, token counts and codes only; alerts for `/ready` failing, failed-job count, queue age, cost cap reached, provider 429 or 5xx rate, p95 latency, storage growth (ADR 0018); an uptime check.
+
+**Decisions.** Observability stack within free tiers (what each retains and where it processes data); log retention period (SPEC 7.1); alert channel; one worker per host or sharing a box (memory).
+
+**Verified by.** A deploy from a clean checkout following only the RUNBOOK; a kill-the-worker drill and a database-restart drill with recovery; a restore drill into a scratch database; an induced alert for each alert rule; a secret scan of the repo history and the image.
+
+### Session 9 - Public demo and portfolio
+
+**Goal.** Anyone can try the product without hurting it, the budget, or the data; and the proof is published.
+
+**Demo risks to design for.** Quota drain: the Groq free tier is about 200,000 tokens a day and one answer is about 1,900 tokens, so roughly 100 answers a day for everyone together, and one visitor can use it all. Prompt-injection and abuse text through the question box; scraping of the document set; posted credentials and account sharing; uploads of hostile files; the demo tenant being altered; a provider outage showing as a broken site.
+
+**Steps.** An employee-only demo user (no upload, delete or write beyond asking); a read-only or screenshot tour for the admin page; per-account, per-IP and **global daily caps** with a clear "demo budget used today, back tomorrow" message (on top of the Step 5 per-tenant cost cap); question length limit; lower rate limits for the demo tenant; a second provider as fallback (Gemini free tier, fictional data only); the **demo tenant reset job** (restore seeded documents, clear any visitor-created rows, idempotent, audited, through a narrowly granted definer) on a schedule; a banner that the data is fictional.
+Portfolio: final evaluation run on the deployed system with results in `docs/EVAL.md` against SPEC 7.2 (recall@5 0.85, groundedness 0.90, citation accuracy 0.90, correct refusal 0.90) and 7.3 (latency, cost); the second fictional tenant added to the isolation tests (SPEC §3); security write-up from SECURITY.md (threat model, controls, cross-tenant test results, dependency review, the `httpx2` near-miss); README with quick start and architecture diagram; 60-second demo video; case study.
+
+**Decisions.** Public credentials or email-gated sign-up; the cap numbers; reset frequency; what to publish of the evaluation set and of failures (recommended: publish the failures too); repository licence; whether to seek one real pilot user (stretch).
+
+**Verified by.** Tests for each cap (user, IP, global) and the over-budget message; a test that the demo user is refused every write the admin may make; a reset test that restores a visitor-modified tenant and leaves other tenants untouched; a staged primary-provider outage that shows the fallback or the unavailable message; every number in the README and case study traceable to a committed report; a fresh-clone run of the README quick start; a final secret scan of the full history.
+
+### v1.1 (after the demoable v1 ships; scope change approved 2026-10-26)
+
+Conversation context for follow-ups (stored per user, tenant-scoped, RLS, with a retention setting; history length; the prompt-privacy rule still holds); feedback (helpful or not, optional comment) and the review queue (refused, down-voted, retried, `could_not_verify`, ADR 0032); analytics (questions per day, top topics, refusal rate, helpfulness, median time, cost per answer); tenant-admin user management and the audit-log view; evaluation from the admin panel and charted, and the eval job in CI (small subset per PR with a fake or recorded provider, full set nightly or on demand, fictional data only). Each gets its own plan, ADR where a decision is involved, and cross-tenant tests for every new table.
+
+### v2 (approved 2026-10-26)
+
+Telegram channel (one-time account linking with a short-lived code, signed webhook, same `/ask` path and caps); SSO; Urdu answers (after English evals pass).
+
+**Open question for review:** none that blocks Step 5. Assumption to confirm: in v1 the on-demand evaluation is run by the operator with the CLI, and the admin-panel button waits for v1.1.
 
 ## Session 3 complete (2026-10-22)
 
