@@ -709,3 +709,27 @@ Hybrid retrieval scored 0.889 where our earlier notes said 0.76. A jump like tha
 
 **Q: What do you do with a metric that is much better than before?**
 A: Recompute it from the raw per-question data, run it twice, and look for what changed in the method before believing it.
+
+## Session 5, Step 2 (retrieval strategy): plain words
+
+### A prepared statement keeps its plan, so a planner setting changed later is ignored
+We wanted to compare how PostgreSQL searches with different settings (`enable_seqscan`, `enable_indexscan`, and pgvector's `hnsw.ef_search`). The first run gave the same answer for every setting, and some "forced index" runs behaved like full scans. The cause: the database driver (psycopg) turns a query into a prepared statement after it has run a few times. A prepared statement keeps its plan, and the planner switches are read only when the plan is made. Every setting used the same SQL text, so after a few runs they all shared one cached plan. The `EXPLAIN` statements, which have different text, were planned fresh, and that is why they showed a different plan from the one that actually ran.
+
+The fix is a unique SQL text per setting (a comment with the label in front of the query). The results of the first run were thrown away. Settings that are read while the query runs, like `hnsw.ef_search`, are not affected; settings that steer the planner are.
+
+**Q: How did you notice?**
+A: The numbers were too regular. Every setting returned exactly 50 rows with identical neighbours, including a setting that, as I knew, can return at most 40. And the plan shown by `EXPLAIN` disagreed with the speed of the query. When a result contradicts what you know the system can do, suspect the measurement first.
+
+**Q: Does this matter in production?**
+A: Yes, in one way. If the app ever sets a planner option per request, a prepared plan would ignore it. The vector search sets nothing like that: it relies on the planner's own choice.
+
+### An approximate index that filters after its scan can quietly return the wrong rows
+HNSW finds the nearest rows in the whole table, then row-level security removes the ones the tenant may not see. With many tenants, most of the nearest rows belong to someone else, so a tenant may get fewer rows than asked for, or not the true nearest. The planner picked the index for a tenant once it had about 2,000 chunks, and from then on the top 5 matched the exact top 5 only about 30 percent of the time (29 to 34 percent in the committed test). No error was raised. Tuning (a larger `ef_search`, iterative scans) helped on some data and failed on near-duplicate content, which policy documents have (versions, boilerplate).
+
+The decision was to drop the index and search the tenant's rows exactly. The tenant-first primary key narrows the search to that tenant, so the cost depends on the tenant's size, not the table's.
+
+**Q: Why not keep the index and tune it?**
+A: Correctness would depend on the planner and on how similar other tenants' documents are. Both change without notice. Exact search is slower at 10,000 chunks and more, but it is always right, and we wrote down when to revisit it.
+
+**Q: What would you do at 100,000 chunks for one tenant?**
+A: Partition the chunks by tenant (or build an index per tenant), so each index holds only one tenant's rows and there is nothing to filter after the scan.

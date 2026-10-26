@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     # Days a deleted document or a replaced version is kept before the purge removes it (ADR 0027). The worker reads
     # the same variable (worker_config.py), so the two must agree.
     document_retention_days: int = Field(default=30, ge=1, le=365)
+    # How many chunks retrieval returns to the answer step (ADR 0030). 5 and 8 are compared in the answer evaluation.
+    retrieval_top_k: int = Field(default=5, ge=1, le=20)
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",

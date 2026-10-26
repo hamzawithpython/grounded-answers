@@ -62,6 +62,15 @@ def metrics(ranks: Sequence[int | None], k: int) -> Metrics:
     return Metrics(len(ranks), hits / len(ranks), reciprocal / len(ranks))
 
 
+def recall_and_mrr_at_k(ranks: Sequence[int | None], k: int) -> tuple[float, float]:
+    """(recall@k, MRR@k) over pairs. MRR@k counts a first hit below rank k as 0, unlike `metrics`, whose MRR runs
+    over every rank that was fetched."""
+    if not ranks:
+        return 0.0, 0.0
+    inside = [rank for rank in ranks if rank is not None and rank <= k]
+    return len(inside) / len(ranks), sum(1.0 / rank for rank in inside) / len(ranks)
+
+
 def percentile(values: Sequence[float], p: float) -> float:
     """Nearest-rank percentile, p in (0, 100]."""
     if not values:

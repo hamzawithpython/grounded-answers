@@ -32,6 +32,7 @@ from alembic import command
 from grounded_answers.scram import build_verifier
 
 from .auth_support import accounts, client  # noqa: F401 - fixtures for the auth HTTP tests
+from .chunk_support import tenants  # noqa: F401 - fixture for the retrieval tests
 from .database import LOGIN_ROLES, DbHandle
 from .guard import TEST_DB_NAME, check_same_cluster, check_targets
 from .ingest_support import admin, made  # noqa: F401 - fixtures for the ingestion tests

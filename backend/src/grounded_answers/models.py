@@ -325,12 +325,7 @@ class Chunk(Base):
             name="chunks_version_fk",
             **_RESTRICT,
         ),
-        Index(
-            "chunks_embedding_hnsw",
-            "embedding",
-            postgresql_using="hnsw",
-            postgresql_ops={"embedding": "vector_cosine_ops"},
-        ),
+        # No index on the embedding: retrieval is an exact scan of the tenant's rows (ADR 0030, migration 0016).
         Index("chunks_tsv_gin", "tsv", postgresql_using="gin"),
     )
 

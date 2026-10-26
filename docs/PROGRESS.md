@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-26 (Session 4 complete; Session 5 Step 1, retrieval eval harness, in progress on `feat/retrieval-eval-harness`)
+**Last updated:** 2026-10-26 (Session 5: Step 1 merged, Step 2 built and awaiting review)
 
 ## Session 5 status (search and answers with citations)
 
@@ -8,23 +8,27 @@ Plan approved 2026-10-26. Each step has its own branch and PR, and stops for rev
 
 | Step | Work | State |
 |---|---|---|
-| 1 | Retrieval evaluation harness against the test DB (`grounded_answers.evaluation`, `pytest -m eval -s`; smoke test in `-m db`) | Built on `feat/retrieval-eval-harness`, awaiting review. Results in `docs/EVAL.md` |
-| 2 | Decision: retrieval strategy (ADR 0030), then `retrieve()` | Next |
-| 3 | Decision: answer model and provider (ADR 0031) | Planned |
+| 1 | Retrieval evaluation harness against the test DB (`grounded_answers.evaluation`, `pytest -m eval -s`; smoke test in `-m db`) | ✅ Merged (PR #52). Results in `docs/EVAL.md` |
+| 2 | Retrieval strategy: ADR 0030 (decisions approved 2026-10-26), migration `0016_drop_hnsw_index`, `RETRIEVAL_TOP_K`, `retrieve()`, the k sweep in the harness, the scale test (`-m eval`, reproducible evidence) | Built on `feat/step-2-retrieval`, awaiting review |
+| 3 | Decision: answer model and provider (ADR 0031) | Next |
 | 4 | Answer contract, citation validation, refusal | Planned |
-| 5 | `POST /ask` | Planned |
+| 5 | `POST /ask` (builds the query-embedding path in the web process, see below) | Planned |
 | 6 | Prompt-injection tests | Planned |
-| 7 | Answer evaluation | Planned |
+| 7 | Answer evaluation (compare `RETRIEVAL_TOP_K` 5 and 8; cross-document answers may need more context) | Planned |
 
-**Step 1 results (k = 5, 45 pairs):** vector R@5 0.800 / MRR 0.636; keyword 0.733 / 0.633; hybrid (RRF) 0.867 / 0.742. The SPEC target is 0.85, and the ceiling is 0.978 (q045's v1.0 pair is always a miss). The hybrid lead is one or two pairs and differs from the scratch figure (0.76), cause unknown, so it is a hypothesis for Step 2.
+**Step 2 decisions (ADR 0030):** hybrid RRF with the standard constant 60 (c=10 gained one pair, which is noise); no reranker; no vector index (migration 0016), so vector search is exact over the tenant's rows; `RETRIEVAL_TOP_K` default 5; query embedding is loaded in the app lifespan, run with `asyncio.to_thread` bounded to about 4, and `/ready` fails until it is loaded.
 
-**Carry into Step 2:** (1) keyword order among ties is arbitrary unless fixed; the rankers use an md5 of the body as tie-break. (2) Evaluate pgvector `hnsw.iterative_scan` with a larger multi-tenant dataset: HNSW filters after the index scan, so RLS can return fewer than k rows at scale. (3) The vector top-1 scores of answerable and unanswerable questions overlap between 0.82 and 0.84 (Step 4's refusal rule). (4) The web process has no query-embedding path yet (the model, about 1.1 GB, must load there). (5) 180 vs 190 chunks against the scratch set is unexplained.
+**Revisit the missing vector index** when retrieval p95 passes about 250 ms or one tenant passes about 10,000 chunks (partitioning by tenant, or an index per tenant). Never add a plain HNSW index back (RUNBOOK, "Retrieval").
 
-**Step 2 instructions (approved 2026-10-26):**
-- The ADR 0030 evidence must include the tie-break note (keyword order among ties was arbitrary until the md5 tie-break) and the hybrid caveat: 45 pairs, one pair = 0.022, and the old scratch figure of 0.76 is unexplained.
-- Extend the harness report with recall and MRR at k = 3, 5, 8 and 10 for each ranker, to decide how many chunks go to the answer model. State which of the 6 hybrid misses (q004 4.4, q012 6.2, q022 3.4.1, q045 6.1, q048 11.2, q049 5.4.1) still appear at k = 8 and k = 10. q045 6.1 is always a miss.
+**Dev actions after the Step 2 PR is merged (the operator runs them):** `alembic upgrade head` on the dev database (it is at `0015_queue_cleanup`; 0016 drops the vector index). `/ready` returns 503 `schema` until then.
+
+**Open before Step 7 (decide, then fix in ingestion):** table chunks carry only the section label (for example `6`), not the clause of the table's caption (`6.2`). So a citation of a table is section-level, and q012 counts as a miss although its top chunk is the right table. The options are to carry the caption label on the table chunk, or to keep citations of tables at section level. It changes chunking (ADR 0021), so it needs your decision.
+
+**Not built in Step 2, decided:** the web process does not load the embedding model yet. It comes with `POST /ask` (Step 5): lifespan load before ready, `to_thread`, a limit of about 4 at a time, one worker per container (about 0.76 GB each, 1.1 GB peak while loading).
 
 **Step 4 instruction:** answerable and unanswerable vector scores overlap (0.82 to 0.84), so refusal cannot rest on a score threshold alone. It needs model judgement plus citation validation.
+
+**Known evidence limits (ADR 0030):** 45 pairs, so one pair is 0.022; the hybrid lead over vector is a hypothesis, and the old scratch figure of 0.76 is unexplained; 180 vs 190 chunks against the scratch set is unexplained; the scale data is synthetic copies of the real chunks.
 
 ## Session 3 complete (2026-10-22)
 

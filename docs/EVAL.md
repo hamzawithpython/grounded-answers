@@ -202,3 +202,115 @@ The vector ranges overlap between 0.82 and 0.84, so a threshold on this score wo
 - One owner-written question set and 45 pairs. Differences of one or two pairs are noise.
 - 157 chunks and one tenant. The HNSW index and RLS filtering at scale are not tested. pgvector's HNSW filters after the index scan, so a filtered query can return fewer than k rows at scale. pgvector 0.8's iterative scans (`hnsw.iterative_scan`) are to be evaluated in Step 2 with a larger, multi-tenant dataset. This harness asserts k rows for the vector and hybrid rankers and reports any shortfall for all three.
 - Latency is for a small table and an idle database.
+
+## Retrieval strategy, Session 5 Step 2 (2026-10-26)
+
+The evidence for ADR 0030. The first two parts come from `uv run pytest -m eval -s -k demo_set` (the harness, now with a k sweep). The last two come from `uv run pytest -m eval -s -k scale` (about 20 minutes). Both are outside CI and reproducible (RUNBOOK).
+
+### Recall and MRR at k (45 pairs; recall@k / MRR@k, where MRR@k counts a first hit below rank k as 0)
+
+| Ranker | k=3 | k=5 | k=8 | k=10 |
+|---|---|---|---|---|
+| vector | 0.756 / 0.611 | 0.800 / 0.621 | 0.867 / 0.629 | 0.889 / 0.632 |
+| keyword | 0.733 / 0.611 | 0.733 / 0.611 | 0.800 / 0.622 | 0.844 / 0.627 |
+| hybrid (constant 60) | 0.800 / 0.722 | 0.867 / 0.736 | 0.867 / 0.736 | 0.889 / 0.738 |
+
+- At k=10 vector search reaches the same recall as hybrid (0.889). Hybrid's advantage is rank quality (MRR@5 0.736 against 0.621) and small k.
+- The cost of more context is linear: chunks average 695 characters, so k=5 is about 3,500 characters, k=8 about 5,600, k=10 about 6,900 (about 870, 1,400 and 1,700 tokens at 4 characters per token, an estimate).
+- Hybrid recall by question type at k = 3, 5, 8, 10: fact 0.90, 0.90, 0.90, 0.95; conditional 0.71, 0.86, 0.86, 0.86; cross_document 0.62, 0.75, 0.75, 0.75; table 0.80 at every k; version 0.75, 1.00, 1.00, 1.00. Cross-document questions do not gain from more chunks.
+
+**Hybrid misses (pairs outside the top k):**
+
+| Pair | Rank in hybrid | At k=8 | At k=10 | What it is |
+|---|---|---|---|---|
+| q022 3.4.1 | 10 | missed | **found** | The expected chunk is vector rank 1. Fusion with keyword search (which does not match "how fast" to "speed limits") moves it down. |
+| q004 4.4 | 34 | missed | missed | A real semantic miss. The late-arrival clause sits in a chunk that mixes 4.1 to 4.5, and the vector rank is 53. |
+| q012 6.2 | beyond the fetched depth | missed | missed | A labelling artefact: the top vector chunk is the right gifts table, but a table chunk carries only the section label (`6`), not `6.2`. |
+| q045 6.1 | never | missed | missed | Always a miss by the retired-version rule. |
+| q048 11.2 | 16 | missed | missed | A real miss (cross-document). |
+| q049 5.4.1 | 18 | missed | missed | A real miss (cross-document). |
+
+### Fusion constant
+
+| Constant | k=3 | k=5 | k=8 | k=10 |
+|---|---|---|---|---|
+| 10 | 0.778 / 0.715 | 0.889 / 0.739 | 0.889 / 0.739 | 0.889 / 0.739 |
+| 30 | 0.800 / 0.722 | 0.867 / 0.736 | 0.867 / 0.736 | 0.889 / 0.738 |
+| **60** | 0.800 / 0.722 | 0.867 / 0.736 | 0.867 / 0.736 | 0.889 / 0.738 |
+| 100 | 0.800 / 0.722 | 0.867 / 0.736 | 0.867 / 0.736 | 0.889 / 0.738 |
+
+A constant of 10 gains one pair (q022 moves to rank 4). One pair is 0.022 on 45 pairs, which is noise, and choosing a constant on this set would overfit it. The standard 60 stays.
+
+### The planner and the vector index, as one tenant grows
+
+20 tenants: 19 ordinary ones (about 8,000 chunks, half of them retired versions, noisy copies of the demo chunks at a cosine of about 0.96 to their source) and one tenant that grows. The queries are the 50 questions, asked as `app_user` for the growing tenant. "Overlap" is the share of the exact top 5 that the plan returned. Fewest rows is the smallest number of rows returned for a query that asked for 50.
+
+| Tenant chunks | Index | Plan the planner chose | p50 / p95 | Fewest rows | Queries with fewer than 5 | Overlap at 5 with exact |
+|---|---|---|---|---|---|---|
+| 2,006 | HNSW present | HNSW index scan | 6.1 / 12.0 ms | 2 | 11 | 0.292 |
+| 5,007 | HNSW present | HNSW index scan | 8.1 / 15.1 ms | 4 | 1 | 0.336 |
+| 10,013 | HNSW present | HNSW index scan | 5.7 / 11.0 ms | 7 | 0 | 0.324 |
+| 20,018 | HNSW present | HNSW index scan | 7.3 / 12.9 ms | 15 | 0 | 0.316 |
+| 2,006 | none | primary key (tenant first), exact sort | 20.3 / 41.0 ms | 50 | 0 | 1.000 |
+| 5,007 | none | primary key, exact sort | 44.7 / 78.9 ms | 50 | 0 | 1.000 |
+| 10,013 | none | primary key, exact sort | 113.6 / 192.7 ms | 50 | 0 | 1.000 |
+| 20,018 | none | primary key, exact sort | 187.7 / 368.9 ms | 50 | 0 | 1.000 |
+
+- With the tenant's 157 chunks (the demo set) among 8,388, the planner used the tenant-first primary key and the answer was exact, at about 8 ms p50. That was measured in an earlier run of this experiment, not by the committed test.
+- With the index present, the planner chooses it from about 2,000 chunks, and the result is fast and silently wrong: about a third of the exact top 5 is returned, and some queries come back with far fewer rows than asked for.
+- Without the index the result is exact at every size, and the cost grows with the tenant's own size. p95 passes 250 ms between 10,000 and 20,000 chunks.
+- A scratch run before this test gave overlaps of 0.74 to 0.84 for the same experiment, with the same plans and the same shortfall. The cause of the difference is unexplained. The committed test is the reference, and the decision does not depend on which is right.
+
+### pgvector's settings, when the index is the only way to narrow
+
+Run with the primary key removed so that HNSW is used (pgvector 0.8.7, `hnsw.ef_search`, `hnsw.iterative_scan`). The tenant under test has the real demo set, 157 visible chunks of 8,388. "Pairs" is the number of the 45 expected pairs with a hit in the top 5 (exact search: 36).
+
+Moderate overlap (copies at a cosine of about 0.91 to their source):
+
+| Setting | Fewest rows | Overlap at 5 | Pairs | p50 / p95 |
+|---|---|---|---|---|
+| default (ef_search 40) | 17 | 0.812 | 30 | 4.9 / 7.2 ms |
+| ef_search 100 | 39 | 0.912 | 32 | 7.0 / 11.7 ms |
+| ef_search 200 | 50 | 0.968 | 36 | 8.4 / 20.7 ms |
+| ef_search 400 | 50 | 0.988 | 36 | 10.4 / 17.9 ms |
+| strict iterative, ef 40 | 50 | 0.812 | 30 | 7.5 / 13.1 ms |
+| strict iterative, ef 100 | 50 | 0.912 | 32 | 7.3 / 10.8 ms |
+| relaxed iterative, ef 40 | 50 | 0.908 | 32 | 6.5 / 10.3 ms |
+| relaxed iterative, ef 100 | 50 | 0.916 | 32 | 6.9 / 17.3 ms |
+
+Near-duplicate content (copies at a cosine of about 0.99, which policy corpora have: versions, boilerplate):
+
+| Setting | Fewest rows | Queries with fewer than 5 | Overlap at 5 | Pairs | p50 / p95 |
+|---|---|---|---|---|---|
+| default | 1 | **50** | 0.244 | 20 | 3.0 / 3.6 ms |
+| ef_search 100 | 1 | 46 | 0.320 | 23 | 3.4 / 6.5 ms |
+| ef_search 200 | 1 | 14 | 0.420 | 26 | 4.2 / 6.1 ms |
+| ef_search 400 | 1 | 5 | 0.564 | 27 | 5.4 / 11.6 ms |
+| strict iterative, ef 40 | 1 | 5 | 0.308 | 24 | 39.6 / 83.8 ms |
+| strict iterative, ef 100 | 1 | 5 | 0.352 | 26 | 38.5 / 70.1 ms |
+| relaxed iterative, ef 40 | 1 | 5 | 0.792 | 31 | 16.6 / 30.4 ms |
+| relaxed iterative, ef 100 | 1 | 5 | 0.796 | 31 | 16.8 / 35.3 ms |
+
+On moderate overlap a larger `ef_search` (200 or more) matches exact search at about 8 to 10 ms. On near-duplicate content no setting tried matches exact search (36 pairs): the best reaches 31, five queries still return fewer than 5 rows, and strict iterative scans cost 40 ms. The reason five queries stay short was not diagnosed.
+
+### Query embedding in the web process (one process, measured once on the development machine)
+
+| Measure | Value |
+|---|---|
+| Working set before the model loads | 51 MiB |
+| Load (including a 2.8 s hash check of the 448 MiB file) | 9.2 s |
+| Working set after load, steady | 752 to 762 MiB |
+| Peak during load | 1,115 MiB |
+| First query | 35 ms |
+| One query alone | p50 28.6 ms, p95 41.8 ms |
+| 50 queries run on the event loop | the loop is blocked for 1,569 ms |
+| 50 queries in threads, 1 at a time | loop lag at most 17.5 ms; throughput 43 queries per second |
+| 4 at a time | loop lag at most 49 ms; 62 queries per second; latency p50 62 ms |
+| 8 at a time | 54 queries per second; latency p50 124 ms (no gain over 4) |
+
+### Limits
+
+- 45 pairs, so one pair is 0.022. The hybrid lead over vector search is a hypothesis: the old scratch figure of 0.76 is unexplained, and at k=10 vector search equals hybrid.
+- The scale data is synthetic copies of the real chunks, with noise of my choosing. The embeddings of the real tenant are real.
+- Timings are from one development machine with an idle database.
+- Keyword search at 20,000 chunks per tenant was not measured.
