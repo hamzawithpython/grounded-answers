@@ -314,3 +314,51 @@ On moderate overlap a larger `ef_search` (200 or more) matches exact search at a
 - The scale data is synthetic copies of the real chunks, with noise of my choosing. The embeddings of the real tenant are real.
 - Timings are from one development machine with an idle database.
 - Keyword search at 20,000 chunks per tenant was not measured.
+
+## Answer providers, Session 5 Step 3b (2026-10-26)
+
+What this is: whether each provider works, what it costs and how fast it is, with the retrieved top 5 chunks of each of the 50 demo questions as sources. It is not an answer-quality score; the answered/refused counts are a sanity check (quality is Steps 4 and 7). Fictional data only. Reproduce with `uv run pytest -m eval -s -k answer_providers` (RUNBOOK, "Answer providers"). Costs are list prices (the free tier charged nothing).
+
+### Groq `openai/gpt-oss-120b`, free tier, reasoning effort `low`, 50 of 50 calls
+
+| Measure | Value |
+|---|---|
+| Calls ok | 50 of 50, no errors (one earlier call failed, see below) |
+| Tokens | input 72,701; output 5,617 (of which reasoning 2,480); 1,566 per answer, output 112 per answer |
+| Reasoning per answer | 10 to 135 tokens (mean 50) |
+| Latency | p50 760 ms, p95 1,139 ms, worst 4,483 ms (target p95 8,000 ms: met) |
+| List-price cost per answer | mean $0.00029, p95 $0.00034 (target $0.002: met) |
+| Sanity | answered 36 of 40 answerable; refused 10 of 10 unanswerable |
+| Free limits on this account (response headers) | 1,000 requests per day, 8,000 tokens per minute |
+
+- **Reasoning is a small share at effort `low`:** 44% of the output tokens, about 50 per answer. Input is 93% of all tokens, so the daily limit is spent mostly on the sources. The 200,000 tokens per day figure comes from Groq's documentation, not from headers. About 95,000 tokens were used on the day of these runs (three runs: 5, 6 and 50 questions), so about 105,000 were left by that estimate.
+- **Pacing:** 8,000 tokens per minute means about 5 answers a minute at 1,570 tokens each. The 50-question run therefore takes about 13 minutes at the 12 s pace.
+- **Strict schema is not a guarantee.** On one earlier run, the sixth call came back as HTTP 400 `json_validate_failed`: the model's own JSON broke the schema (a citation of the wrong type) although strict mode was on. The runner first treated that as a rejected request and stopped. It is now typed as invalid output (a test covers it), and the 50-call run had no such failure. One failure in about 61 calls is a rate to watch, not a measurement of it.
+- **Four answerable questions were refused:** q004 and q022 (both hybrid misses at k=5, ADR 0030, so the right chunk was probably not among the sources) and q043 and q044 (version questions; why they were refused was not examined). This is not scored here. Step 7 judges it.
+
+### Gemini `gemini-2.5-flash-lite`, free tier: not available
+
+The first call returned HTTP 404: "This model models/gemini-2.5-flash-lite is no longer available to new users", pointing to `gemini-3.5-flash-lite`. Google's deprecation page confirms that access to the 2.5 models is limited to users who have used them before. So this account cannot test the model in ADR 0031's candidate list. Whether it supports a response schema was therefore not tested. No quota was spent (the runner stops on the first rejected call).
+
+### Anthropic Claude Haiku 5.5: not live-tested
+
+No paid account during development. The adapter is tested offline against fake HTTP responses only.
+
+### Limits of this evidence
+
+50 questions, one run per provider, one development machine and network, one day's free-tier conditions. Latency is the successful call, without rate-limit waits. The failure rate of strict schema output needs more calls than this.
+
+### Gemini `gemini-3.5-flash-lite`, free tier: 5 of 5 calls (a smoke test, not a comparison)
+
+One 5-question call, on a key from a project with no billing. Schema support is shown by every output parsing against the response schema, and by Google's model page ("Structured outputs: Supported").
+
+| Measure | Value |
+|---|---|
+| Calls ok | 5 of 5, no errors |
+| Tokens | input 6,930; output 222 (reasoning 0 reported); 1,430 per answer |
+| Latency | p50 1,126 ms, p95 1,883 ms (target 8,000 ms: met) |
+| List-price cost per answer | mean $0.00053, p95 $0.00060 (target $0.002: met; list price $0.30 / $2.50 per million tokens) |
+| Sanity | answered 3 of 4 answerable; refused 1 of 1 unanswerable |
+| Free limits | unknown: Google sends no rate-limit headers; the limits are shown only in AI Studio |
+
+Five calls say it works and what each costs. They do not measure its daily capacity, its failure rate, or its quality against Groq.

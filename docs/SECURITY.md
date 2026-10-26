@@ -194,7 +194,7 @@ Designed, not built. The app has no login, refresh or logout endpoints yet. The 
 | `worker_user` | The worker process's environment, as `WORKER_DATABASE_URL`. Never a file (ADR 0017). | Background jobs (1b-i: the worker runs; the purge job comes later) |
 | Test cluster admin | Root `.env` (`TEST_POSTGRES_*`), passed in the shell | DB tests only, port 5433 |
 | Verifiers (SCRAM strings) | Environment, for one `psql` run; redacted from error output | Bootstrap and tests |
-| Answer-model API keys (ADR 0031: Groq, Gemini, Anthropic; none created yet) | `backend/.env` only (git-ignored), read as `SecretStr`. Never in code, logs, error messages or `repr`. One key per provider, created by the operator. | The web app's answer step; the evaluation runs |
+| Answer-model API keys (ADR 0031: `GROQ_API_KEY`, `GEMINI_API_KEY` exist, free tiers, fictional data only; `ANTHROPIC_API_KEY` is for a client's own paid key, BYOK) | `backend/.env` only (git-ignored), read as `SecretStr`, sent only in a request header (never a URL or body). Never in code, logs, error messages or `repr` (tests: `test_answering_secrets_and_prompt.py`). One key per provider, created by the operator. | The web app's answer step; the evaluation runs |
 
 Passwords are never printed. Driver error messages are not logged, because they can contain hosts.
 

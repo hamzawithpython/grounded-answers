@@ -10,8 +10,8 @@ Plan approved 2026-10-26. Each step has its own branch and PR, and stops for rev
 |---|---|---|
 | 1 | Retrieval evaluation harness against the test DB (`grounded_answers.evaluation`, `pytest -m eval -s`; smoke test in `-m db`) | ✅ Merged (PR #52). Results in `docs/EVAL.md` |
 | 2 | Retrieval strategy: ADR 0030 (decisions approved 2026-10-26), migration `0016_drop_hnsw_index`, `RETRIEVAL_TOP_K`, `retrieve()`, the k sweep in the harness, the scale test (`-m eval`, reproducible evidence) | ✅ Merged (PR #53); dev DB at 0016 |
-| 3a | Decision: answer model and provider (ADR 0031, decisions approved 2026-10-26), on `docs/adr-0031-answer-model` | Written, awaiting review |
-| 3b | Provider test: `AnswerModel` interface, three adapters, key handling, run on the 40 + 10 questions (plan below) | Planned, after 3a |
+| 3a | Decision: answer model and provider (ADR 0031, decisions approved 2026-10-26) | ✅ Merged (PR #54) |
+| 3b | Provider test: `AnswerModel` interface, Groq/Gemini/Anthropic adapters, key handling, live run on the 50 questions | Built on `feat/step-3b-answer-model`, awaiting review. Groq works (50 of 50). `gemini-2.5-flash-lite` is closed to new accounts (404), so Gemini 3.5 Flash-Lite replaces it (5 of 5, smoke test). Haiku offline-tested only (no paid account). Keys rotated 2026-10-26. |
 | 4 | Answer contract, citation validation, refusal | Planned |
 | 5 | `POST /ask` (builds the query-embedding path in the web process, see below) | Planned |
 | 6 | Prompt-injection tests | Planned |
@@ -19,6 +19,11 @@ Plan approved 2026-10-26. Each step has its own branch and PR, and stops for rev
 
 **Step 3 decisions (ADR 0031):** demo tenant on Groq `openai/gpt-oss-120b`, free tier, fictional data only, reasoning effort `low`; candidates to test are Groq gpt-oss-120b, Gemini 2.5 Flash-Lite (free, fictional data only) and Claude Haiku 5.5 (paid reference, credit added by the operator); real client data needs all five points of ADR 0031 decision 3; local-only mode is a recorded future option; Groq is demo-only until its DPA confirms no training. The interface forbids user, tenant and email values in prompts (tested) and reports tokens, cost and latency per answer (in the eval report only in Step 3b; the per-tenant metering table with RLS, grants and catalog guard comes in Step 5 with `/ask` and the cost cap). Keys: `SecretStr`, `backend/.env` only, with a log-redaction test.
 
+**For Step 4 (answer contract):** the invalid-output policy is to retry once, then refuse gracefully. Broken output (invalid JSON, a schema failure, a cut-off answer) is never shown to the user. Groq's strict schema failed once in about 61 calls (`json_validate_failed`), so this path is real. Citation numbers outside 1 to n are also invalid output.
+
+**For Step 7 (answer evaluation):** investigate why gpt-oss-120b refused q043 and q044 (both version questions). q004 and q022 were refused too, and are known retrieval misses at k=5 (ADR 0030). Compare `RETRIEVAL_TOP_K` 5 and 8. Ask before any full 50-question provider re-run: the Groq free tier has about 200,000 tokens per day and one run uses about 78,000.
+
+**Step 3b rules from review (2026-10-26):** outputs of eval runs go in the git-ignored `backend/.eval-output/`, not `%TEMP%`. Direct dependencies are reviewed by exact name: `docs/DEPENDENCIES.md` plus `tests/test_dependencies_documented.py` (the scaffold's `httpx2` was replaced by the real `httpx`).
 **Step 2 decisions (ADR 0030):** hybrid RRF with the standard constant 60 (c=10 gained one pair, which is noise); no reranker; no vector index (migration 0016), so vector search is exact over the tenant's rows; `RETRIEVAL_TOP_K` default 5; query embedding is loaded in the app lifespan, run with `asyncio.to_thread` bounded to about 4, and `/ready` fails until it is loaded.
 
 **Revisit the missing vector index** when retrieval p95 passes about 250 ms or one tenant passes about 10,000 chunks (partitioning by tenant, or an index per tenant). Never add a plain HNSW index back (RUNBOOK, "Retrieval").

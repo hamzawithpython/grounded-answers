@@ -736,7 +736,7 @@ Set the same variables as "Running Database Tests", plus the model directory (Em
 
 ```powershell
 $env:TEST_EMBEDDING_MODEL_DIR = "$env:LOCALAPPDATA\grounded-answers\models\614241f622f53c4eeff9890bdc4f31cfecc418b3"
-$env:EVAL_REPORT_PATH = "$env:TEMP\retrieval-eval.json"   # optional: per-question detail, numbers and ids only
+$env:EVAL_REPORT_PATH = ".\.eval-output\retrieval-eval.json"   # optional: per-question detail, numbers and ids only
 uv run pytest -m eval -s
 ```
 
@@ -767,8 +767,29 @@ Do not add a plain HNSW index back. Once a tenant has about 2,000 chunks the pla
 **Reproduce the evidence** (outside CI, about 20 minutes, needs the model, same environment as "Retrieval evaluation"):
 
 ```powershell
-$env:EVAL_REPORT_PATH = "$env:TEMP\retrieval-scale"     # a folder; optional, one JSON file per result
+$env:EVAL_REPORT_PATH = ".\.eval-output\retrieval-scale"     # a folder; optional, one JSON file per result
 uv run pytest -m eval -s -k scale
 ```
 
 It builds 20 tenants with up to 28,000 chunks, prints one `GROWTH` line per tenant size and one `SETTINGS` line per pgvector setting, and puts the schema back afterwards. It rebuilds `grounded_answers_test`, so do not run it beside `pytest -m db`.
+
+## Answer providers (ADR 0031, Session 5 Step 3b)
+
+**Keys.** `GROQ_API_KEY` and `GEMINI_API_KEY` live in `backend/.env` only (git-ignored; check with `git check-ignore -v backend/.env`, which must print the `.gitignore` rule). Paste them yourself; never into a command line, a chat or a commit. `ANTHROPIC_API_KEY` is for a client's own paid key (BYOK) and is not set during development. A key is read as a secret and sent only in a request header. If one leaks, revoke it in the provider's console and create a new one.
+
+**Free tiers take fictional data only.** Groq's training terms are unconfirmed and Google trains on free-tier data (ADR 0031). Never point these keys at a real client's documents.
+
+**Run the provider test** (outside CI; live calls; same environment as "Retrieval evaluation" plus the keys):
+
+```powershell
+$env:EVAL_ANSWER_PROVIDERS = "groq"        # "groq", "gemini", or "groq,gemini"
+$env:EVAL_ANSWER_LIMIT = "5"               # questions per provider; 50 is the full set
+$env:EVAL_REPORT_PATH = ".\.eval-output\answer-providers.json"   # optional; numbers and ids only
+uv run pytest -m eval -s -k answer_providers
+```
+
+Other knobs: `EVAL_TOKEN_BUDGET` (default 150000 tokens per provider), `EVAL_GROQ_PACE_SECONDS` (default 12, because Groq's free limit is 8,000 tokens per minute), `EVAL_GEMINI_PACE_SECONDS` (default 5). The report shows tokens used and the provider's rate-limit headers from the last response.
+
+**Groq free-tier limits** (from the response headers of this account): 1,000 requests per day and 8,000 tokens per minute. The 200,000 tokens per day figure is from Groq's documentation and is not in the headers, so keep your own count: one full 50-question run uses about 77,000 tokens (measured, see EVAL). A 429 with a long `retry-after` means the daily limit; the runner stops instead of waiting.
+
+**Expect:** a run stops early, with the reason in the report, when a provider rejects a request (bad key, unknown model, unsupported schema) or the token budget is reached. A missing key is a failure, not a skip.
