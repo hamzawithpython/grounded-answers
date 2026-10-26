@@ -1,6 +1,6 @@
 # Progress — Grounded Answers
 
-**Last updated:** 2026-10-26 (Session 5: Step 1 merged, Step 2 built and awaiting review)
+**Last updated:** 2026-10-26 (Session 5: Steps 1 and 2 merged, Step 3 ADR 0031 written)
 
 ## Session 5 status (search and answers with citations)
 
@@ -9,12 +9,15 @@ Plan approved 2026-10-26. Each step has its own branch and PR, and stops for rev
 | Step | Work | State |
 |---|---|---|
 | 1 | Retrieval evaluation harness against the test DB (`grounded_answers.evaluation`, `pytest -m eval -s`; smoke test in `-m db`) | ✅ Merged (PR #52). Results in `docs/EVAL.md` |
-| 2 | Retrieval strategy: ADR 0030 (decisions approved 2026-10-26), migration `0016_drop_hnsw_index`, `RETRIEVAL_TOP_K`, `retrieve()`, the k sweep in the harness, the scale test (`-m eval`, reproducible evidence) | Built on `feat/step-2-retrieval`, awaiting review |
-| 3 | Decision: answer model and provider (ADR 0031) | Next |
+| 2 | Retrieval strategy: ADR 0030 (decisions approved 2026-10-26), migration `0016_drop_hnsw_index`, `RETRIEVAL_TOP_K`, `retrieve()`, the k sweep in the harness, the scale test (`-m eval`, reproducible evidence) | ✅ Merged (PR #53); dev DB at 0016 |
+| 3a | Decision: answer model and provider (ADR 0031, decisions approved 2026-10-26), on `docs/adr-0031-answer-model` | Written, awaiting review |
+| 3b | Provider test: `AnswerModel` interface, three adapters, key handling, run on the 40 + 10 questions (plan below) | Planned, after 3a |
 | 4 | Answer contract, citation validation, refusal | Planned |
 | 5 | `POST /ask` (builds the query-embedding path in the web process, see below) | Planned |
 | 6 | Prompt-injection tests | Planned |
 | 7 | Answer evaluation (compare `RETRIEVAL_TOP_K` 5 and 8; cross-document answers may need more context) | Planned |
+
+**Step 3 decisions (ADR 0031):** demo tenant on Groq `openai/gpt-oss-120b`, free tier, fictional data only, reasoning effort `low`; candidates to test are Groq gpt-oss-120b, Gemini 2.5 Flash-Lite (free, fictional data only) and Claude Haiku 5.5 (paid reference, credit added by the operator); real client data needs all five points of ADR 0031 decision 3; local-only mode is a recorded future option; Groq is demo-only until its DPA confirms no training. The interface forbids user, tenant and email values in prompts (tested) and reports tokens, cost and latency per answer (in the eval report only in Step 3b; the per-tenant metering table with RLS, grants and catalog guard comes in Step 5 with `/ask` and the cost cap). Keys: `SecretStr`, `backend/.env` only, with a log-redaction test.
 
 **Step 2 decisions (ADR 0030):** hybrid RRF with the standard constant 60 (c=10 gained one pair, which is noise); no reranker; no vector index (migration 0016), so vector search is exact over the tenant's rows; `RETRIEVAL_TOP_K` default 5; query embedding is loaded in the app lifespan, run with `asyncio.to_thread` bounded to about 4, and `/ready` fails until it is loaded.
 
