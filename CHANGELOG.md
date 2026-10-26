@@ -6,6 +6,7 @@ Dependency and tooling changes are listed here too.
 ## [Unreleased]
 
 ### Added
+- ADR 0031 (Session 5, Step 3): the answer-model decision. Demo on Groq gpt-oss-120b (free, fictional data); candidates Groq, Gemini 2.5 Flash-Lite and Claude Haiku 5.5; a five-point requirement for real client data; a provider-neutral `AnswerModel` interface. SECURITY gets risk R21 (document text leaves the system) and a row for the answer-model keys.
 - Retrieval (Session 5, Step 2, ADR 0030): `grounded_answers.retrieval.retrieve()`, hybrid search (exact vector search plus keyword search, reciprocal rank fusion with constant 60) as `app_user` in a tenant transaction. It returns the top `RETRIEVAL_TOP_K` chunks (new setting, default 5, range 1 to 20) with text, document title, version, section, heading and clause labels. The rankers moved from `evaluation` to `retrieval`. Tests: RLS, current-version rule, tenant isolation, k rows, the no-keyword-match fallback, determinism, input validation; three planted defects were each caught.
 - The evaluation harness reports recall@k and MRR@k at k = 3, 5, 8 and 10, the hybrid misses at each k, and the sensitivity to the fusion constant.
 - `tests/db/test_retrieval_scale.py` (marker `eval`, outside CI): the evidence for dropping the vector index, reproducible. 20 tenants and up to 28,000 chunks; the planner's choice as one tenant grows; pgvector settings on near-duplicate content.
