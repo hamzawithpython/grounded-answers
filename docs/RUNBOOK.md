@@ -693,6 +693,16 @@ uv run python -m grounded_answers.evaluation.embed_concurrency $d --report .\.ev
 
 Expect a table of five cases (limit 1, 2 and 4 with as many callers, then limits 1 and 2 with four callers) and exit code 0. On a host with fewer CPUs than 4, expect the gain from 2 slots to shrink: if 2 slots give under about 20 % more throughput than 1, set `EMBED_CONCURRENCY=1`.
 
+## `/ask` limits and the metering flag (ADR 0033, Step 5c)
+
+Settings in the web app's environment (`backend\.env`): `ASK_RATE_USER_PER_MIN` (5), `ASK_RATE_TENANT_PER_MIN` (20), `ASK_INFLIGHT_PER_TENANT` (2, how many questions of one tenant may be in progress), `ASK_DEADLINE_SECONDS` (12, range 5 to 30, the whole request budget). A tenant's daily cap and providers are set with the admin CLI (next section).
+
+**Valkey timeouts.** The shared Valkey client has 0.5 s socket timeouts. If Valkey is slow or down, `/ask`, login and upload answer 503 (fail closed, intended), and the API log shows `ask.valkey_unavailable operation=... reason=...`.
+
+**The metering flag.** If writing a usage row fails twice, the log shows `ask.metering_failed`, the question still gets its answer, and `/ask` answers 503 for that tenant for 5 minutes (`ask.unavailable ... reason=metering_failed`). Find the cause before it expires, or the flag is set again by the next failed write. Likely causes: a missing grant on `answer_usage` (check with the catalog test), a full disk, the database in recovery. Look for `ask.metering_insert_failed ... reason=<ErrorClass>`.
+
+**Log lines** (all carry `request_id` and `tenant=<16 hex characters>`, a keyed hash of the tenant id; the same tenant always gives the same value while `AUTH_LOG_HMAC_KEY` is unchanged): `ask.done` (outcome, attempts, tokens, cost in micro-dollars, milliseconds), `ask.limited`, `ask.unavailable` (stage and reason), `ask.failed` (an unexpected error: class name only). To find a tenant's value, compute it with `grounded_answers.log_ref.tenant_log_ref(key, tenant_id)`; there is no raw id in the logs to search for.
+
 ## Tenant answer settings (ADR 0033)
 
 Every tenant needs a settings row before `/ask` (Step 5c) will answer for it. `create-tenant` makes the row with the fail-closed defaults: no providers, data class `real`, cap $0. Set the real values with the admin CLI, in the shell where `MIGRATION_DATABASE_URL` is set (see "Admin CLI"):

@@ -824,3 +824,26 @@ A: A load balancer or a person can tell "alive but not ready" from "dead". The a
 
 ### A test that cannot fail points at redundant code
 One planted defect (skipping a state check) was not caught. The reason: the model is only set when the load succeeded, so the state check could never decide anything the model check did not. The fix was to delete the redundant check, not to write a test for unreachable behaviour.
+
+## Session 5, Step 5c-1 (the `/ask` flow): plain words
+
+### Put the order of the checks in a test
+The flow runs the cheap checks first (Valkey), then the database, then CPU, and the paid model call last, so a request that will be refused costs almost nothing. A test records every stage in one list and asserts the exact order, and asserts that a refused request never reached the later stages. Without that, someone can move the embedding in front of the cap check and nothing fails.
+
+**Q: What does "fail closed" mean in this flow?**
+A: When a safety check cannot run (Valkey down, the database slow, no settings row), the answer is "no", not "probably fine". Every check before the model call has a test where the check itself breaks and the model is still never called.
+
+### A slot that cannot leak
+Limiting how many questions run at once needs a counter. A plain counter that goes up and down leaks if a process is killed between the two. Giving the counter an expiry does not fix it, because other requests keep refreshing the expiry. So each running request is its own entry with its own expiry time in a sorted set. A killed request's entry simply times out, and nothing else can keep it alive. A test plays exactly that: two requests that never finish, healthy traffic around them, and the slots coming back after the hold time.
+
+### If the bookkeeping fails, stop serving
+The daily cap is a sum of rows. If writing the rows fails silently, the sum stays at zero and the cap never trips. So a failed write is tried twice, and if both fail, a flag blocks that tenant for five minutes. The user who was already answered still gets their answer, because they did nothing wrong and the model was already paid for. The flag turns a silent failure into a visible one.
+
+### Log a hash, not an id
+Logs are copied around, searched and kept. A tenant id in a log is a tenant id everywhere that log goes. A keyed hash of the id lets an operator follow one tenant's requests without exposing the id, and it cannot be reversed or guessed without the key. A test reads the source of every log call in the project and fails if one names a tenant, user, document or email value; a second test puts known strings into a request and searches every log record for them.
+
+**Q: Why two tests for the same rule?**
+A: The first reads code and is cheap, but it can only see names. The second runs the real flow and sees values. Each catches what the other cannot.
+
+### Read your own claim twice
+While writing up the embedding measurements I first claimed the mean latency was the same for every limit. Re-reading the table showed it was not (the throughput differed). The wording was fixed before anyone relied on it. Numbers in a table are easy to summarise wrongly.

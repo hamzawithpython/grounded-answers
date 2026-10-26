@@ -522,6 +522,35 @@ flowchart TD
 
 With `ASK_ENABLED=true` the web process loads the pinned embedding model after startup, in a background thread, so the app takes requests at once and `/ready` answers 503 `embedder` until the model is loaded (and stays 503 if the load fails). Embedding a question runs in a thread behind a semaphore of `EMBED_CONCURRENCY` slots (default 2). A caller waits at most 2 s for a slot (then 503 busy) and at most 3 s for the embedding (then 503 took too long). The process then holds about 0.76 GB steady and 1.1 GB at the peak of the load, whatever the concurrency (`docs/EVAL.md`). With `ASK_ENABLED` off (the default) none of this exists: no model is loaded and `/ready` does not wait for one.
 
+### 6.3 The `/ask` flow (Session 5, Step 5c-1, ADR 0033; the HTTP layer is Step 5c-2)
+
+```mermaid
+flowchart TD
+  A[verified caller + question] --> B{rate limit<br/>user and tenant}
+  B -- over --> B1[429 rate_limited]
+  B -- Valkey down --> X[503]
+  B --> C{metering flag set?}
+  C -- yes --> X
+  C --> D{in-flight slot free?}
+  D -- no --> D1[429 busy]
+  D --> E[read settings + today's spend]
+  E -- DB down or slow --> X
+  E -- no row or no providers --> E1[503 not_configured, metered]
+  E -- spend at or over cap --> E2[429 daily_limit, not metered]
+  E --> F{provider allowed and key present?}
+  F -- no --> F1[503, metered, no call]
+  F --> G[embed] --> H[retrieve] --> I[answer_question<br/>validate, one corrective retry]
+  G -- busy, timeout, not ready --> X2[503 try_again, metered]
+  H -- DB error or timeout --> X2
+  I -- provider error or deadline --> X2
+  I --> J[metering row, tried twice]
+  J -- both fail --> K[set tenant flag, still answer]
+  J --> L[answered or refused, 200]
+  K --> L
+```
+
+The slot taken at "in-flight" is released in every case, including an exception and a cancelled request. No database connection is held while the model is called: settings, retrieval and metering each run in their own short transaction. Every stage has a timeout inside the 12 s deadline; the metering write runs after it. Logs carry a request id, a keyed hash of the tenant id (`log_ref.py`), codes, counts and timings, and nothing else.
+
 ## 7. Row-Level Security summary
 
 | Table | RLS | Policies |
