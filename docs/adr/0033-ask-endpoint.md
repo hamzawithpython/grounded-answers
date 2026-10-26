@@ -54,7 +54,7 @@ The policy lives in `answering/policy.py`. A provider is usable for a tenant whe
 
 ### 7. Query embedding in the web process
 
-Loaded in the background at startup, so `/health` answers at once and `/ready` returns 503 `embedder` until the model is loaded (ADR 0030 said so; the other option, a blocking load, would show as a refused connection instead). A failed load leaves the process unready and logs the code. A switch `ASK_ENABLED` (default off) keeps CI and development light: off means 404 and no model load; on requires `EMBEDDING_MODEL_DIR`. Embedding runs in `asyncio.to_thread` behind a semaphore (default 2, range 1 to 4, set from the measurement in Step 5b). The web process then holds about 0.76 GB steady and 1.1 GB at its peak while loading, as the worker does (ADR 0030, ADR 0022). Tests use a fake embedder; one local `db` test uses the real model.
+Loaded in the background at startup, so `/health` answers at once and `/ready` returns 503 `embedder` until the model is loaded (ADR 0030 said so; the other option, a blocking load, would show as a refused connection instead). A failed load leaves the process unready and logs the code. A switch `ASK_ENABLED` (default off) keeps CI and development light: off means 404 and no model load; on requires `EMBEDDING_MODEL_DIR`. Embedding runs in `asyncio.to_thread` behind a semaphore (default 2, range 1 to 4). **Measured in Step 5b** (`docs/EVAL.md`, two runs on a 4-CPU development machine): memory is the same at 1, 2 and 4 slots (steady about 760 MiB, peak 1,106 to 1,126 MiB during the load); with as many callers as slots, throughput is about 48 queries a second at 1 slot, 64 at 2 and 67 at 4; with four callers at once, 4 slots finish sooner (p50 52 ms against 67 ms for 2 slots) but stall the event loop longer (up to 62 ms against 24 ms). Nothing a user would notice separates 2 from 4, so 2 is the default: a third more throughput than 1 and less contention with the rest of the process. Raise it if traffic shows questions queueing for a slot. The web process then holds about 0.76 GB steady and 1.1 GB at its peak while loading, as the worker does (ADR 0030, ADR 0022). Tests use a fake embedder; one local `db` test uses the real model.
 
 ### 8. Logging
 
@@ -71,6 +71,10 @@ Logged: `request_id`, a keyed hash of the tenant id, provider, model, outcome co
 ## What Step 5a built
 
 Migration `0017_answer_usage_settings` (`tenant_settings`, `answer_usage`, RLS, the three grants, a backfill of the fail-closed defaults for existing tenants); `answering/policy.py`; `answering/usage.py` (the outcome and invalid-code lists); the ORM models; the admin commands `show-tenant-settings` and `set-tenant-settings`; `create-tenant` now creates the default row; catalog guard and CHECK lists updated; tests for isolation, the grants, the CHECKs (a sentence is refused in every text column), the lists against the code, the CLI and its audit rows, and the backfill.
+
+## What Step 5b built
+
+`embedding/query.py` (`QueryEmbedder`: background load in a thread, states `loading`, `ready` and `failed`, a semaphore bounding concurrent embeddings, a 2 s slot wait that ends in `QueryEmbedderBusy` and a 3 s embedding timeout that ends in `QueryEmbedderTimeout`; a slot is released when its thread ends, not when the caller gives up, so a timed-out request cannot raise the number of running threads); settings `ASK_ENABLED` (default false), `EMBEDDING_MODEL_DIR` and `EMBED_CONCURRENCY` (default 2, 1 to 4); `/ready` reports 503 `embedder` while the model loads and when the load fails (the process stays up and unready, and the log line holds the error class only); with `ASK_ENABLED` off there is no embedder and `/ready` does not wait for one; `ASK_ENABLED` on without `EMBEDDING_MODEL_DIR` stops startup with a message naming the setting. The measurement harness `evaluation/embed_concurrency.py` and its results are in `docs/EVAL.md`.
 
 ## Consequences
 

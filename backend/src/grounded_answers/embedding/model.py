@@ -129,8 +129,9 @@ class PinnedEmbedder:
         return self._embed([QUERY_PREFIX + text])[0]
 
 
-def load_embedder(model_dir: Path) -> PinnedEmbedder:
-    """Verify and load the model, then log one line. Called once at worker startup (ADR 0022, D6).
+def load_embedder(model_dir: Path, *, process: str = "worker") -> PinnedEmbedder:
+    """Verify and load the model, then log one line. Called once at worker startup (ADR 0022, D6) and, with
+    process="web", once in the web process when POST /ask is enabled (ADR 0033, decision 7).
 
     The line names the model and its pinned revision, and the load time. It holds no file path and no document data.
     """
@@ -138,6 +139,10 @@ def load_embedder(model_dir: Path) -> PinnedEmbedder:
     embedder = PinnedEmbedder(model_dir)
     load_ms = round((time.monotonic() - started) * 1000)
     logger.info(
-        "worker.model_loaded model=%s revision=%s load_ms=%d", MODEL_NAME, MODEL_REVISION, load_ms
+        "%s.model_loaded model=%s revision=%s load_ms=%d",
+        process,
+        MODEL_NAME,
+        MODEL_REVISION,
+        load_ms,
     )
     return embedder

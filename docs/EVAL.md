@@ -308,6 +308,40 @@ On moderate overlap a larger `ef_search` (200 or more) matches exact search at a
 | 4 at a time | loop lag at most 49 ms; 62 queries per second; latency p50 62 ms |
 | 8 at a time | 54 queries per second; latency p50 124 ms (no gain over 4) |
 
+### Query embedding at 1, 2 and 4 at a time (Session 5, Step 5b, ADR 0033 decision 7)
+
+**Method.** `grounded_answers.evaluation.embed_concurrency` starts one fresh process per case, loads the real pinned model through the same `QueryEmbedder` the web app uses, then embeds 200 questions drawn in turn from the 50 evaluation questions with *callers* asking at once against a limit of *limit* slots, as fast as they can (closed loop). Latency includes the wait for a slot. "Loop lag" is the longest time a 5 ms sleep on the event loop was late. Memory is the operating system's working set for the process (Windows `PeakWorkingSetSize`). The whole matrix ran twice; each cell below is run 1 / run 2.
+
+| Limit | Callers | p50 ms | p95 ms | max ms | queries per second | loop lag max ms |
+|---|---|---|---|---|---|---|
+| 1 | 1 | 20.6 / 18.8 | 31.9 / 29.5 | 41.9 / 32.6 | 46.2 / 50.2 | 17.2 / 21.2 |
+| 2 | 2 | 28.8 / 29.9 | 43.6 / 46.1 | 50.5 / 59.1 | 65.7 / 63.0 | 17.5 / 17.2 |
+| 4 | 4 | 50.9 / 54.2 | 94.2 / 113.9 | 216.0 / 129.9 | 69.6 / 63.7 | 36.7 / 61.9 |
+| 1 | 4 | 78.9 / 85.2 | 107.7 / 117.3 | 126.3 / 198.0 | 49.0 / 44.7 | 15.1 / 19.6 |
+| 2 | 4 | 67.4 / 67.7 | 154.1 / 101.8 | 227.2 / 156.9 | 52.6 / 55.4 | 22.2 / 23.6 |
+
+| Memory (MiB, every case) | Value |
+|---|---|
+| Working set before the model loads | 52 |
+| Working set after the load and the run | 747 to 768, the same at 1, 2 and 4 |
+| Peak (during the load) | 1,106 to 1,126, the same at 1, 2 and 4 |
+| Load time | 7 to 9 s |
+
+**What it shows.**
+- **Memory does not depend on concurrency.** The model weights are shared by all threads. Size the process by the peak of the load (about 1.1 GB), not by the limit.
+- **Throughput with as many callers as slots:** 1 slot gives about 48 queries per second, 2 slots about 64 (a third more), 4 slots about 67 (4 % more than 2, inside the 8 % spread between the two runs). The machine has 4 logical CPUs, and the model session has its own small thread pool, so more slots stop helping early.
+- **Four callers against fewer slots:** a limit of 4 gives p50 about 52 ms and 67 queries per second, a limit of 2 gives p50 67 ms and about 54 per second, a limit of 1 gives p50 82 ms and about 47 per second. The p95 is similar for 4 and 2 (94 to 114 ms against 102 to 154 ms). So when four people ask in the same instant, 4 slots finish them sooner, by about 15 ms at the median. **The 54 per second at a limit of 2 with four callers is lower than the 64 per second with two callers, in both runs; I do not know why** (a waiting caller adds one hand-off through the event loop, but I did not test that).
+- **Event loop:** at most 15 to 24 ms late at limits 1 and 2, 37 to 62 ms at 4.
+- **Budgets:** the worst single call in any case was 227 ms, against the 2 s slot wait and the 3 s embedding timeout of ADR 0033. At the rate limits (20 questions a minute per tenant) more than two questions at the same instant will be rare, and a 15 ms difference is small beside a model call of about one second.
+
+**Decision: `EMBED_CONCURRENCY` defaults to 2** (range 1 to 4). The evidence does not separate 2 from 4 by anything a user would notice: memory is identical, and 4 slots win only when four questions arrive in the same instant, by about 15 ms at the median, at the price of a longer event-loop stall (up to 62 ms against 24 ms) and of more CPU taken from the rest of the web process. Two slots give a third more throughput than one. Raise it to 4 if traffic shows questions queueing for a slot; on a host with 2 vCPUs, try 1; measure again on the chosen host (RUNBOOK, "Query embedding in the web process").
+
+**Limits of this evidence.**
+- One development machine (4 logical CPUs, Windows) with other applications running (free physical memory about 1.1 GB at the start), two runs per case.
+- A first single trial under heavier memory pressure showed a working set of about 500 MiB after the load while the peak was 1,021 MiB: Windows trims the working set of a process when memory is short. So read the steady figure as 750 to 770 MiB only when memory is free, and size by the peak.
+- Closed-loop load, short evaluation questions. A question near the 1,000-character limit has more tokens (the model reads at most 512) and costs more than these; that was not measured.
+- Not measured: the web process with the model loaded while it also serves requests and database queries, and the cause of the lower throughput of a limit of 2 with four callers.
+
 ### Limits
 
 - 45 pairs, so one pair is 0.022. The hybrid lead over vector search is a hypothesis: the old scratch figure of 0.76 is unexplained, and at k=10 vector search equals hybrid.

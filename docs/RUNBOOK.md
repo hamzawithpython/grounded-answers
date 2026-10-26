@@ -670,6 +670,29 @@ A backup holds deleted content until the provider's backup window expires (SECUR
 
 **The purge job exists now (ADR 0027).** The restore rule is: **after any restore from backup, run the purge again before the app serves users.** A restore brings back documents and versions whose purge date has passed, and the purge removes them again. The procedure:1. Restore into a new database, never over the live one.2. Start the worker against the restored database, with `DOCUMENT_RETENTION_DAYS` set to the value the live system uses. The purge sweep runs when the worker starts and then every 15 minutes, so wait for two sweep runs (the worker logs `purge.sweep`).3. Check that nothing due is left. This query must return `0`:   ```sql   SELECT (SELECT count(*) FROM grounded.documents WHERE deleted_at IS NOT NULL AND purge_after < now())        + (SELECT count(*) FROM grounded.document_versions AS v JOIN grounded.documents AS d             ON d.tenant_id = v.tenant_id AND d.id = v.document_id           WHERE v.status = 'retired' AND v.purge_after < now() AND d.deleted_at IS NULL);   ```4. Check the audit log: each purged item has a `document.purged` or `document_version.purged` entry from the restore window.5. Only then point the app at the restored database, and check `/ready`.A purge that is still running, or a failed purge job, leaves its item in place. Look at the job queue (`queue.procrastinate_jobs`, `status`) and the worker log. Do not point the app at the database until step 3 returns `0`.
 
+## Query embedding in the web process (ADR 0033, Step 5b)
+
+`POST /ask` (Step 5c) needs the embedding model in the web process. It is off by default. Settings in the web app's environment (`backend\.env` or the shell):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `ASK_ENABLED` | `false` | On: load the model in the background and report it in `/ready`. Off: no model, and `/ready` does not wait for one |
+| `EMBEDDING_MODEL_DIR` | none | Required when `ASK_ENABLED=true`: the pinned model directory (see "Embedding model files and the worker", step 1). Startup stops with `EMBEDDING_MODEL_DIR is not set` if it is missing |
+| `EMBED_CONCURRENCY` | `2` | Questions embedded at the same time, 1 to 4 (each uses two CPU threads) |
+
+**Memory.** The web process then holds about 0.76 GB steady and 1.1 GB at the peak while loading, the same at every `EMBED_CONCURRENCY`. Web plus worker plus Postgres on one machine needs about 2.5 GB, so keep the dev database stopped for large runs.
+
+**Check it.** Start the API with `ASK_ENABLED=true`, then call `/ready` repeatedly. Expect `503` with `{"status":"not_ready","failed":["embedder"]}` for about 10 seconds while the model loads, then `200`. If it stays 503, read the API log: `query embedder load failed reason=<ErrorClass>` (for example `ModelIntegrityError`: the model files do not match their pins, so fetch them again). The log never holds the path or the message.
+
+**Measure again** (on a new host, or after a change to the model or its threads; about 2 minutes; needs about 1.2 GB free; do not run it beside the database tests):
+
+```powershell
+$d = "$env:LOCALAPPDATA\grounded-answers\models\614241f622f53c4eeff9890bdc4f31cfecc418b3"
+uv run python -m grounded_answers.evaluation.embed_concurrency $d --report .\.eval-output\embed-concurrency.json
+```
+
+Expect a table of five cases (limit 1, 2 and 4 with as many callers, then limits 1 and 2 with four callers) and exit code 0. On a host with fewer CPUs than 4, expect the gain from 2 slots to shrink: if 2 slots give under about 20 % more throughput than 1, set `EMBED_CONCURRENCY=1`.
+
 ## Tenant answer settings (ADR 0033)
 
 Every tenant needs a settings row before `/ask` (Step 5c) will answer for it. `create-tenant` makes the row with the fail-closed defaults: no providers, data class `real`, cap $0. Set the real values with the admin CLI, in the shell where `MIGRATION_DATABASE_URL` is set (see "Admin CLI"):
