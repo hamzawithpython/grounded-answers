@@ -12,7 +12,7 @@
   {
     "table": "answer_usage",
     "name": "answer_usage_invalid_codes_check",
-    "definition": "CHECK (((invalid_codes <@ ARRAY['invalid_output'::text, 'empty_answer'::text, 'no_citations'::text, 'bad_ref'::text, 'quote_ellipsis'::text, 'quote_too_short'::text, 'quote_too_long'::text, 'quote_not_informative'::text, 'quote_not_found'::text, 'number_not_grounded'::text]) AND (cardinality(invalid_codes) <= 2)))"
+    "definition": "CHECK (((invalid_codes <@ ARRAY['invalid_output'::text, 'empty_answer'::text, 'no_citations'::text, 'bad_ref'::text, 'quote_ellipsis'::text, 'quote_too_short'::text, 'quote_too_long'::text, 'quote_not_informative'::text, 'quote_not_found'::text, 'number_not_grounded'::text, 'answer_language'::text, 'prompt_echo'::text]) AND (cardinality(invalid_codes) <= 2)))"
   },
   {
     "table": "answer_usage",

@@ -18,14 +18,19 @@ from grounded_answers.answering.messages import REFUSAL_MESSAGES
 
 BACKEND = Path(__file__).resolve().parents[1]
 MIGRATION = BACKEND / "alembic" / "versions" / "0017_answer_usage_settings.py"
+MIGRATION_CODES = BACKEND / "alembic" / "versions" / "0018_more_invalid_codes.py"
 
 
-def _migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("migration_0017", MIGRATION)
+def _load(name: str, path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _migration() -> ModuleType:
+    return _load("migration_0017", MIGRATION)
 
 
 # ---- provider policy ----
@@ -85,7 +90,9 @@ def test_migration_provider_list_matches_known_providers() -> None:
 def test_migration_outcomes_and_codes_match_the_code() -> None:
     migration = _migration()
     assert tuple(migration.OUTCOMES) == usage.OUTCOMES
-    assert tuple(migration.INVALID_CODES) == usage.INVALID_CODES
+    # 0017 is applied and unchanged; 0018 replaced the code list, and its list is the current one.
+    assert tuple(_load("migration_0018", MIGRATION_CODES).INVALID_CODES) == usage.INVALID_CODES
+    assert tuple(migration.INVALID_CODES) == usage.INVALID_CODES[: len(migration.INVALID_CODES)]
 
 
 def test_every_validation_code_is_on_the_invalid_code_list() -> None:

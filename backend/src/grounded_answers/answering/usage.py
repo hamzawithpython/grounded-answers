@@ -39,6 +39,8 @@ INVALID_CODES: Final = (
     "quote_not_informative",
     "quote_not_found",
     "number_not_grounded",
+    "answer_language",
+    "prompt_echo",
 )
 
 _REFUSAL_OUTCOMES: Final = {

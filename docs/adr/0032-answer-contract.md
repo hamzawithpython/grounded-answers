@@ -37,6 +37,8 @@ An answer that does not refuse is valid only if all of these hold (`answering/va
 
 **Normalisation** (`answering/normalise.py`), applied to the quote and to the chunk: Unicode NFKC, case-folding, curly quotes to straight quotes, dashes to "-", every run of whitespace, the table separator "|" and bullet characters to one space, and a lone "-" between spaces (a list marker that the extractor joined into the line) dropped. A map back to the original offsets is kept.
 
+**Amended by ADR 0034 (Step 6):** a `[n]` marker in the answer text must name a given source (`bad_ref`); the answer text must not be mostly non-Latin script (`answer_language`, never applied to quotes); it must not repeat 8 words of the system rules (`prompt_echo`); a quote copied from the escaped text the model saw is accepted; invisible characters are ignored on both sides of the quote check.
+
 **Why the strict rule (one bad citation invalidates the answer):** the schema does not say which sentence a citation supports, so dropping a bad citation could leave a claim on screen that nothing supports. The cost is some false refusals. They are counted (invalid codes in the logs and the evaluation report) and the rule is revisited with Step 7 data. Rejected: dropping invalid citations when one remains valid.
 
 **What this does not prove.** Quote validation proves that the cited text exists in the cited source. It does not prove that the whole answer is supported by it. The numeric check catches one common drift (a number the quote lacks), nothing more. Groundedness of the answer text is measured in Step 7.

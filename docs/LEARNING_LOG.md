@@ -870,3 +870,26 @@ CI failed on one old test after the `/ask` tests were added. That test runs as t
 
 **Q: Why did the chunked local runs pass when CI failed?**
 A: Each chunk rebuilt the database, so data left by one test could not reach a test in another chunk. The failure needed the leftover data and the sensitive test in the same run.
+
+## Session 5, Step 6 (prompt injection): plain words
+
+### A model cannot be made to obey, so test what is around it
+Prompt injection is text inside a document or a question that tries to give the model orders. Nothing in our code can force a model to refuse an order, so the useful tests assume the model obeyed and ask what the layers behind it do. A fake "obedient attacker" returns the output each attack wants: an invented quote, a source number that was never given, a reply in the wrong language, the rules recited, text outside the format. Each is stopped by a named check, with a coded reason and no text stored. A live run then shows how a real model behaves.
+
+**Q: What is a canary and why letters only?**
+A: A made-up word that an attack asks the model to write, so obedience can be detected without judging meaning. A digit in it would be stopped by the "every number must be in a quote" check, which would hide whether the model obeyed.
+
+### Hidden text has two kinds
+Some characters are invisible by nature (Unicode tag characters that spell ASCII, bidirectional controls, zero-width characters), and those can be removed safely. Other hidden text is ordinary text that is merely drawn white, tiny, or invisible in a PDF: no extractor can tell it from visible text, so it reaches the model as data and the other layers have to cope. The first kind is stripped; the second is tested and documented.
+
+### Keep the characters a language needs
+The zero-width joiner and non-joiner look like hidden characters, but in Urdu, Persian and Indic scripts they decide how letters join. Removing them would change the words. The strip list keeps those two on purpose, and a test has an Urdu word with each to prove it.
+
+### A check that does not know the future needs an expiry note
+The language check refuses answers in non-Latin script, because the rules say English. That is right for v1 and wrong the day Urdu documents arrive, so it never looks at quotes, and the ADR says v2 Urdu answers replace it. A rule that is a stopgap should say so where it is written.
+
+### Validation proves existence, not support
+The dry run made the limit visible: a model that obeys an attack and also cites a real sentence is served. A canary, "Paris", a planted link and endless output all passed, because each had a real quote and no digit. Only the Urdu reply, the recital of the rules and the ids were stopped. This is the groundedness problem of Step 7. The honest way to carry it is to say so in the tests (`known_limit`), in the ADR and in the results, rather than to claim the defense is complete.
+
+**Q: What would close that gap?**
+A: Checking that the answer is supported by its quote, for example by overlap of content words or by a second model asked only whether the quote supports the answer. Both cost false refusals or money, so they are measured in Step 7 before being adopted.
