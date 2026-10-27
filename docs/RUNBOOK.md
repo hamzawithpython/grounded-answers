@@ -718,6 +718,23 @@ uv run pytest -m eval -s -k ask_live
 
 Expect `1 passed`, a table of the questions (ids, HTTP status, result, citations, wall time) and the `answer_usage` rows (outcome, tokens, cost, latency). The live run counts against Groq's free tier (about 200,000 tokens a day; one answer is about 1,900 tokens). Ask before running it. The test rebuilds `grounded_answers_test`, so do not run it beside `pytest -m db`. It carries the `live` marker: it is the only kind of test that keeps the provider keys and the network. Every other test runs with the keys removed and a guard that fails it if it tries to leave the machine (`tests/network_guard.py`); if a new test fails with `network guard: the test tried to reach outside this machine`, give it a fake instead of marking it `live`.
 
+## Prompt-injection defenses and the live probe (ADR 0034, Step 6)
+
+**Migration 0018 on the dev database.** The dev database is at `0017_answer_usage_settings`. Run `alembic upgrade head` once (see "Migrations to head") after the PR that adds it is merged. It adds two codes to the CHECK list of `answer_usage.invalid_codes`; `/ready` returns 503 `schema` until then, because the code expects `0018_more_invalid_codes`.
+
+**New refusals you may see.** A question can now end as `could_not_verify` because the model answered in a non-Latin script (`answer_language`) or recited its rules (`prompt_echo`). They are in the metering row's `invalid_codes`, and Step 7 counts them in the false-refusal rate. If real Urdu-script questions appear before v2, a reply in Urdu script will be refused: that is the stopgap in ADR 0034, decision 4.
+
+**The live probe** (outside CI; about 4 minutes; needs about 1.5 GB free; fictional data only). Same environment as "Retrieval evaluation":
+
+```powershell
+$env:EVAL_INJECTION_LIVE = "dry"     # rehearsal and detector self-test: an obedient fake model, no network, no key
+uv run pytest -m eval -s -k injection_live
+$env:EVAL_INJECTION_LIVE = "groq"    # live: real Groq, about 26k tokens (at most about 53k with retries), needs GROQ_API_KEY in backend\.env
+uv run pytest -m eval -s -k injection_live
+```
+
+Expect `1 passed` and a table of 12 attacks: the served result, the attempts, what validation caught (invalid codes), and which detectors fired on the served answer. The dry run must show detector hits on 9 attacks (an obedient model that cites a real passage is served: the known limit) and validation stopping the Urdu reply, the recital and the ids; that is the self-test. A live hit is a finding, not a test failure. The test rebuilds `grounded_answers_test`, so do not run it beside `pytest -m db`; it carries the `live` marker (keys and network on). Ask before running the live mode.
+
 ## `/ask` limits and the metering flag (ADR 0033, Step 5c)
 
 Settings in the web app's environment (`backend\.env`): `ASK_RATE_USER_PER_MIN` (5), `ASK_RATE_TENANT_PER_MIN` (20), `ASK_INFLIGHT_PER_TENANT` (2, how many questions of one tenant may be in progress), `ASK_DEADLINE_SECONDS` (12, range 5 to 30, the whole request budget). A tenant's daily cap and providers are set with the admin CLI (next section).

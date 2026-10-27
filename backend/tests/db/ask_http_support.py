@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
 from grounded_answers import main as main_module
+from grounded_answers.answering.prompt import Prompt, build_prompt
 from grounded_answers.answering.types import AnswerRequest, AnswerResult
 from grounded_answers.ask.providers import ProviderRegistry
 from grounded_answers.auth_keys import load_key_ring
@@ -66,6 +67,8 @@ class FakeAnswerModel:
     def __init__(self) -> None:
         self.script: list[AnswerResult | Exception] = []
         self.requests: list[AnswerRequest] = []
+        # The prompt the real adapters would send for each request: what the model would be shown.
+        self.prompts: list[Prompt] = []
         self.delay = 0.0
         self.started = threading.Event()
         self._lock = threading.Lock()
@@ -73,6 +76,7 @@ class FakeAnswerModel:
     async def answer(self, request: AnswerRequest) -> AnswerResult:
         with self._lock:
             self.requests.append(request)
+            self.prompts.append(build_prompt(request))
             step = (
                 self.script[min(len(self.requests), len(self.script)) - 1] if self.script else None
             )

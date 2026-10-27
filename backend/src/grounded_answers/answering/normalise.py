@@ -2,6 +2,8 @@
 Text normalisation for quote checking (ADR 0032, decision 2), with a map back to the original offsets.
 
 The same function runs on the quote and on the chunk body, so the two are compared in one form:
+- invisible characters (text.py: tag characters, bidirectional controls, U+200B, U+FEFF) removed; the joiners U+200C and
+  U+200D stay;
 - Unicode NFKC, then case-folding;
 - curly quotes become straight quotes; en dashes, em dashes and minus signs become "-";
 - every run of whitespace (newlines and non-breaking spaces included), the table separator "|" and the bullet
@@ -16,6 +18,8 @@ The character sets are written as code points, so that no look-alike character s
 
 import unicodedata
 from typing import Final
+
+from grounded_answers.answering.text import is_invisible
 
 # Single curly quotes (U+2018 to U+201B) become "'", double ones (U+201C to U+201F) become '"'.
 _QUOTES: Final = {
@@ -34,6 +38,8 @@ def _chars(text: str) -> list[tuple[str, int]]:
     """Each original character, expanded by NFKC and case-folding, with its original offset."""
     out: list[tuple[str, int]] = []
     for offset, original in enumerate(text):
+        if is_invisible(original):
+            continue  # removed on both sides of the comparison (text.py), so a quote still matches
         for char in unicodedata.normalize("NFKC", original).casefold():
             if char in _QUOTES:
                 char = _QUOTES[char]
